@@ -1,0 +1,29 @@
+# Secrets
+.env
+config.yaml
+
+# Data
+data/
+logs/
+reports/
+tasks/
+nul
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Node
+react-claude-chat/node_modules/
+react-claude-chat/dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated
+*.log
+digest_*.html
+linkedin_article*.md
+sacred-texts*.md

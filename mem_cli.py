@@ -1,0 +1,463 @@
+"""
+Memory & Skill CLI helper
+==========================
+Exposes memory and skill operations as CLI commands so the daemon agent
+can call them via Bash (non-streaming mode doesn't support MCP servers).
+
+Usage:
+  python mem_cli.py <command> [args...]
+
+Memory commands:
+  context                           - Get full context summary
+  pending [limit]                   - Get pending tasks
+  due                               - Get due tasks (ready now)
+  scheduled                         - Get future scheduled tasks
+  stats                             - Get task stats
+  start_task <id>                   - Mark task as in_progress
+  complete_task <id> <result>       - Mark task as completed
+  fail_task <id> <error>            - Mark task as failed
+  add_task <title> [desc] [pri] [due_at] [recurring] - Add a new task
+  log <message>                     - Log a message
+  add_learning <cat> <content>      - Add a learning
+  get_learnings [category]          - Get learnings
+  rules                             - List active hard rules
+  promote_rule <learning_id>        - Promote a learning to hard rule
+  demote_rule <learning_id>         - Demote a hard rule back to learning
+
+Profile commands:
+  profile [category]                - Show user profile (all or by category)
+  set_profile <cat> <key> "<val>" [confidence] [source] - Set a profile fact
+  del_profile <cat> <key>           - Delete a profile fact
+
+Skill commands:
+  skills                            - List installed skills
+  find_skill <description>          - Find skill matching description
+  skill_content <name>              - Get full skill content
+  create_skill <name> <desc> <body> - Create a new skill
+  add_script <skill> <file> <code>  - Add script to skill
+  add_ref <skill> <file> <content>  - Add reference to skill
+  update_skill <name> <body>        - Update skill body
+
+Subagent commands:
+  subagents                         - List installed subagent definitions
+  subagent_content <name>           - Get full SUBAGENT.md content
+  create_subagent <name> <desc> <body> - Create persistent subagent definition
+
+Task folder commands:
+  task_folder <id>                  - Get/create task folder path
+
+Semantic search commands:
+  search "<query>" [limit] [--table <name>]  - AI-powered semantic search
+  embed_backfill                    - Backfill embeddings for existing data
+  embed_stats                       - Show embedding coverage statistics
+"""
+
+import sys
+import json
+import io
+import os
+from pathlib import Path
+from urllib.request import urlopen, Request
+from urllib.error import URLError
+
+# Fix Windows console encoding
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+
+# Ensure proactive dir is in path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from memory import Memory
+
+memory = Memory()
+
+DAEMON_PORT = int(os.getenv("AGENT_DAEMON_PORT", os.getenv("AGENT_API_PORT", "8420")))
+
+
+def _wake_daemon():
+    """Notify the daemon to recalculate its sleep timeout (fire-and-forget)."""
+    try:
+        req = Request(f"http://localhost:{DAEMON_PORT}/wake", method="POST")
+        urlopen(req, timeout=2)
+    except (URLError, OSError):
+        pass  # Daemon not running — that's fine
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__)
+        sys.exit(1)
+
+    cmd = sys.argv[1]
+
+    # ── Memory commands ──────────────────────────────────────
+
+    if cmd == "context":
+        print(memory.build_context_summary())
+
+    elif cmd == "conversations":
+        # Show recent conversations or search by keyword
+        keyword = sys.argv[2] if len(sys.argv) > 2 else None
+        limit = int(sys.argv[3]) if len(sys.argv) > 3 else 20
+        if keyword:
+            # Search conversations by keyword
+            import sqlite3
+            conn = sqlite3.connect(str(memory.db_path))
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """SELECT id, role, content, created_at FROM conversations
+                   WHERE content LIKE ? AND session_id = 'shared_chat'
+                   ORDER BY created_at DESC LIMIT ?""",
+                (f"%{keyword}%", limit),
+            ).fetchall()
+            conn.close()
+            if rows:
+                print(f"Found {len(rows)} messages matching '{keyword}':")
+                for r in reversed(list(rows)):
+                    content = r["content"][:300] + "..." if len(r["content"]) > 300 else r["content"]
+                    print(f"\n[{r['created_at']}] {r['role'].upper()}:\n{content}")
+            else:
+                print(f"No conversations found matching '{keyword}'")
+        else:
+            convos = memory.get_conversation_history(session_id="shared_chat", limit=limit)
+            for c in convos:
+                content = c["content"][:300] + "..." if len(c["content"]) > 300 else c["content"]
+                print(f"\n[{c.get('created_at', '')}] {c['role'].upper()}:\n{content}")
+
+    elif cmd == "pending":
+        limit = int(sys.argv[2]) if len(sys.argv) > 2 else 10
+        tasks = memory.get_pending_tasks(limit=limit)
+        print(json.dumps(tasks, indent=2, default=str))
+
+    elif cmd == "due":
+        tasks = memory.get_due_tasks()
+        print(json.dumps(tasks, indent=2, default=str))
+
+    elif cmd == "scheduled":
+        tasks = memory.get_scheduled_tasks()
+        if not tasks:
+            print("No scheduled tasks.")
+        else:
+            for t in tasks:
+                print(f"  #{t['id']} [{t['next_run_at']}] {t['title']}"
+                      + (f"  (recurring: {t['recurring_cron']})" if t.get('recurring_cron') else ""))
+
+
+    elif cmd == "stats":
+        print(json.dumps(memory.get_task_stats(), indent=2))
+
+    elif cmd == "start_task":
+        task_id = int(sys.argv[2])
+        memory.start_task(task_id)
+        folder = memory.get_task_folder(task_id)
+        print(f"Task #{task_id} marked as in_progress (folder: {folder})")
+
+    elif cmd == "complete_task":
+        task_id = int(sys.argv[2])
+        result = sys.argv[3] if len(sys.argv) > 3 else "Done"
+        memory.complete_task(task_id, result)
+        print(f"Task #{task_id} completed: {result}")
+
+    elif cmd == "fail_task":
+        task_id = int(sys.argv[2])
+        error = sys.argv[3] if len(sys.argv) > 3 else "Unknown error"
+        memory.fail_task(task_id, error)
+        print(f"Task #{task_id} failed: {error}")
+
+    elif cmd == "add_task":
+        title = sys.argv[2]
+        desc = sys.argv[3] if len(sys.argv) > 3 else ""
+        pri = int(sys.argv[4]) if len(sys.argv) > 4 else 5
+        due = sys.argv[5] if len(sys.argv) > 5 else None
+        recur = sys.argv[6] if len(sys.argv) > 6 else None
+        task_id = memory.add_task(
+            title=title, description=desc, priority=pri,
+            due_at=due, recurring_cron=recur,
+        )
+        info = f"Task #{task_id} created: {title}"
+        if due:
+            info += f" (due: {due})"
+        if recur:
+            info += f" (recurring: {recur})"
+        print(info)
+        _wake_daemon()  # Notify daemon to recalculate sleep for new task
+
+    elif cmd == "log":
+        msg = " ".join(sys.argv[2:])
+        memory.log_conversation(role="system", content=msg)
+        print(f"Logged: {msg}")
+
+    elif cmd == "add_learning":
+        cat = sys.argv[2]
+        content = " ".join(sys.argv[3:])
+        memory.add_learning(category=cat, insight=content)
+        print(f"Learning added [{cat}]: {content[:100]}")
+
+    elif cmd == "get_learnings":
+        cat = sys.argv[2] if len(sys.argv) > 2 else None
+        learnings = memory.get_learnings(category=cat)
+        print(json.dumps(learnings, indent=2, default=str))
+
+    # ── Hard Rules commands ───────────────────────────────────
+
+    elif cmd == "rules":
+        rules = memory.get_rules()
+        if not rules:
+            print("No active hard rules.")
+        else:
+            print(f"Active hard rules ({len(rules)}):")
+            for r in rules:
+                print(f"  #{r['id']} [{r['category']}] {r['insight']}")
+
+    elif cmd == "promote_rule":
+        learning_id = int(sys.argv[2])
+        if memory.promote_rule(learning_id):
+            print(f"Learning #{learning_id} promoted to hard rule.")
+        else:
+            print(f"Learning #{learning_id} not found or already a rule.")
+
+    elif cmd == "demote_rule":
+        learning_id = int(sys.argv[2])
+        if memory.demote_rule(learning_id):
+            print(f"Rule #{learning_id} demoted back to regular learning.")
+        else:
+            print(f"Learning #{learning_id} not found or not a rule.")
+
+    # ── Profile commands ──────────────────────────────────────
+
+    elif cmd == "profile":
+        cat = sys.argv[2] if len(sys.argv) > 2 else None
+        facts = memory.get_profile(category=cat)
+        if not facts:
+            print("No profile data." + (f" (category: {cat})" if cat else ""))
+        else:
+            current_cat = None
+            for f in facts:
+                if f["category"] != current_cat:
+                    current_cat = f["category"]
+                    print(f"\n[{current_cat.upper()}]")
+                conf = f"(conf:{f['confidence']}, {f['source']})"
+                print(f"  {f['key']} = {f['value']}  {conf}")
+
+    elif cmd == "set_profile":
+        cat = sys.argv[2]
+        key = sys.argv[3]
+        value = sys.argv[4]
+        conf = float(sys.argv[5]) if len(sys.argv) > 5 else 0.8
+        source = sys.argv[6] if len(sys.argv) > 6 else "stated"
+        memory.set_profile(cat, key, value, conf, source)
+        print(f"Profile: {cat}/{key} = {value}  (conf:{conf}, {source})")
+
+    elif cmd == "del_profile":
+        cat = sys.argv[2]
+        key = sys.argv[3]
+        deleted = memory.delete_profile(cat, key)
+        if deleted:
+            print(f"Deleted profile: {cat}/{key}")
+        else:
+            print(f"Not found: {cat}/{key}")
+
+    # ── Skill commands ───────────────────────────────────────
+    # Skill tools are SdkMcpTool objects — call .handler() for the async fn
+
+    elif cmd == "skills":
+        from skill_tools import list_installed_skills
+        import asyncio
+        result = asyncio.run(list_installed_skills.handler({}))
+        print(result["content"][0]["text"])
+
+    elif cmd == "find_skill":
+        desc = " ".join(sys.argv[2:])
+        from skill_tools import find_skill_for_task
+        import asyncio
+        result = asyncio.run(find_skill_for_task.handler({"task_description": desc}))
+        print(result["content"][0]["text"])
+
+    elif cmd == "skill_content":
+        name = sys.argv[2]
+        from skill_tools import get_skill_content
+        import asyncio
+        result = asyncio.run(get_skill_content.handler({"skill_name": name}))
+        print(result["content"][0]["text"])
+
+    elif cmd == "create_skill":
+        name = sys.argv[2]
+        desc = sys.argv[3]
+        body = sys.argv[4]
+        loc = sys.argv[5] if len(sys.argv) > 5 else "project"
+        from skill_tools import create_full_skill
+        import asyncio
+        result = asyncio.run(create_full_skill.handler({
+            "name": name, "description": desc, "body": body, "location": loc
+        }))
+        print(result["content"][0]["text"])
+
+    elif cmd == "add_script":
+        skill = sys.argv[2]
+        filename = sys.argv[3]
+        content = sys.argv[4]
+        from skill_tools import add_skill_script
+        import asyncio
+        result = asyncio.run(add_skill_script.handler({
+            "skill_name": skill, "filename": filename, "content": content
+        }))
+        print(result["content"][0]["text"])
+
+    elif cmd == "add_ref":
+        skill = sys.argv[2]
+        filename = sys.argv[3]
+        content = sys.argv[4]
+        from skill_tools import add_skill_reference
+        import asyncio
+        result = asyncio.run(add_skill_reference.handler({
+            "skill_name": skill, "filename": filename, "content": content
+        }))
+        print(result["content"][0]["text"])
+
+    elif cmd == "update_skill":
+        name = sys.argv[2]
+        body = sys.argv[3]
+        from skill_tools import update_skill_body
+        import asyncio
+        result = asyncio.run(update_skill_body.handler({
+            "skill_name": name, "new_body": body
+        }))
+        print(result["content"][0]["text"])
+
+    # ── Subagent commands ────────────────────────────────────
+
+    elif cmd == "subagents":
+        subagents_root = Path(__file__).resolve().parent / "subagents"
+        if not subagents_root.exists():
+            print("No subagent definitions found.")
+        else:
+            found = False
+            for sub_dir in sorted(subagents_root.iterdir()):
+                if not sub_dir.is_dir():
+                    continue
+                sub_md = sub_dir / "SUBAGENT.md"
+                if not sub_md.exists():
+                    continue
+                found = True
+                content = sub_md.read_text(encoding="utf-8", errors="replace")
+                # Extract description from frontmatter
+                import re
+                fm = re.search(r'^---\s*\n(.*?)\n---', content, re.DOTALL)
+                desc = ""
+                provider = "auto"
+                task_type = "general"
+                if fm:
+                    d = re.search(r'description:\s*(.+)', fm.group(1))
+                    if d:
+                        desc = d.group(1).strip().strip('"\'')
+                    p = re.search(r'provider:\s*(\S+)', fm.group(1))
+                    if p:
+                        provider = p.group(1)
+                    t = re.search(r'task_type:\s*(\S+)', fm.group(1))
+                    if t:
+                        task_type = t.group(1)
+                print(f"  {sub_dir.name}: {desc} [{provider}, {task_type}]")
+            if not found:
+                print("No subagent definitions found.")
+
+    elif cmd == "subagent_content":
+        name = sys.argv[2]
+        subagents_root = Path(__file__).resolve().parent / "subagents"
+        sub_md = subagents_root / name / "SUBAGENT.md"
+        if sub_md.exists():
+            print(sub_md.read_text(encoding="utf-8", errors="replace"))
+        else:
+            print(f"Subagent '{name}' not found at {sub_md}")
+
+    elif cmd == "create_subagent":
+        name = sys.argv[2]
+        desc = sys.argv[3]
+        body = sys.argv[4]
+        subagents_root = Path(__file__).resolve().parent / "subagents"
+        sub_dir = subagents_root / name
+        sub_dir.mkdir(parents=True, exist_ok=True)
+        (sub_dir / "scripts").mkdir(exist_ok=True)
+        sub_md = sub_dir / "SUBAGENT.md"
+        # Build SUBAGENT.md with frontmatter
+        content = f"---\nname: {name}\ndescription: >-\n  {desc}\nprovider: auto\ntask_type: general\n---\n\n{body}"
+        sub_md.write_text(content, encoding="utf-8")
+        print(f"Subagent '{name}' created at {sub_dir}")
+
+    # ── Embedding / Semantic search commands ─────────────────
+
+    elif cmd == "search":
+        query_text = sys.argv[2] if len(sys.argv) > 2 else ""
+        if not query_text:
+            print("Usage: python mem_cli.py search \"<query>\" [limit] [--table <name>]")
+            sys.exit(1)
+
+        limit = 5
+        table_filter = None
+        i = 3
+        while i < len(sys.argv):
+            if sys.argv[i] == "--table" and i + 1 < len(sys.argv):
+                table_filter = sys.argv[i + 1]
+                i += 2
+            else:
+                try:
+                    limit = int(sys.argv[i])
+                except ValueError:
+                    pass
+                i += 1
+
+        tables = [table_filter] if table_filter else None
+        results = memory.semantic_search(query_text, tables=tables, limit=limit)
+        if results:
+            print(f"Found {len(results)} semantic matches for '{query_text}':\n")
+            for r in results:
+                print(f"  [{r['table']}] #{r['row_id']} (distance: {r['distance']})")
+                print(f"    {r['preview']}")
+                print()
+        else:
+            print(f"No semantic matches for '{query_text}' (embeddings may not be available)")
+
+    elif cmd == "embed_backfill":
+        store = memory.embeddings
+        if store is None:
+            print("Embeddings not available (check OpenAI API key and sqlite-vec installation)")
+            sys.exit(1)
+        print("Backfilling embeddings for existing data...")
+        stats = store.backfill()
+        print(f"Backfill complete:")
+        print(f"  Conversations: {stats.get('conversations', 0)} newly embedded")
+        print(f"  Tasks: {stats.get('tasks', 0)} newly embedded")
+        print(f"  Learnings: {stats.get('learnings', 0)} newly embedded")
+        if stats.get("error"):
+            print(f"  Error: {stats['error']}")
+
+    elif cmd == "embed_stats":
+        store = memory.embeddings
+        if store is None:
+            print("Embeddings not available (check OpenAI API key and sqlite-vec installation)")
+            sys.exit(1)
+        stats = store.get_stats()
+        if not stats.get("available"):
+            print("Embeddings not available")
+        else:
+            print("Embedding coverage:")
+            for tbl in ("conversations", "tasks", "learnings"):
+                info = stats.get(tbl, {})
+                embedded = info.get("embedded", 0)
+                total = info.get("total", 0)
+                pct = (embedded / total * 100) if total > 0 else 0
+                print(f"  {tbl}: {embedded}/{total} ({pct:.0f}%)")
+
+    # ── Task folder commands ──────────────────────────────────
+
+    elif cmd == "task_folder":
+        task_id = int(sys.argv[2])
+        folder = memory.get_task_folder(task_id)
+        print(str(folder))
+
+    else:
+        print(f"Unknown command: {cmd}")
+        print("Run 'python mem_cli.py' for help")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
