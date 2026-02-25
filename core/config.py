@@ -96,6 +96,17 @@ def save_config(config: dict[str, Any]) -> None:
     _config_cache = None
 
 
+def save_env_file(config: dict[str, Any]) -> None:
+    """Write sensitive config to .env file for services that read env vars directly."""
+    env_lines = []
+    for yaml_key, env_var in _ENV_MAP.items():
+        val = config.get(yaml_key, "")
+        if val:
+            env_lines.append(f"{env_var}={val}")
+    env_path = _PROACTIVE_DIR / ".env"
+    env_path.write_text("\n".join(env_lines) + "\n", encoding="utf-8")
+
+
 def _get_default(key: str) -> Any:
     """Default values for config keys."""
     defaults = {

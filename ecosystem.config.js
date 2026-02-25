@@ -15,6 +15,11 @@
 
 const path = require("path");
 
+// Use virtual environment Python (created by launcher.py)
+const pythonPath = process.platform === "win32"
+  ? path.join(__dirname, ".venv", "Scripts", "python.exe")
+  : path.join(__dirname, ".venv", "bin", "python3");
+
 module.exports = {
   apps: [
     // ─── 1. Agent Daemon ──────────────────────────────────
@@ -23,7 +28,7 @@ module.exports = {
     {
       name: "agent-daemon",
       script: "daemon_v2.py",
-      interpreter: "C:/Users/Στέφανος/AppData/Local/Programs/Python/Python313/python.exe",
+      interpreter: pythonPath,
       cwd: __dirname,
 
       env: {
@@ -62,7 +67,7 @@ module.exports = {
     {
       name: "agent-api",
       script: "api_server.py",
-      interpreter: "C:/Users/Στέφανος/AppData/Local/Programs/Python/Python313/python.exe",
+      interpreter: pythonPath,
       cwd: __dirname,
 
       env: {
@@ -91,7 +96,7 @@ module.exports = {
     {
       name: "telegram-bot",
       script: "telegram_bot.py",
-      interpreter: "C:/Users/Στέφανος/AppData/Local/Programs/Python/Python313/python.exe",
+      interpreter: pythonPath,
       cwd: __dirname,
 
       env: {
@@ -118,15 +123,14 @@ module.exports = {
     {
       name: "email-digest",
       script: path.join(
-        ".Claude",
-        "Skills",
+        "skills",
         "outlook-email-digest",
         "scripts",
         "outlook_digest.py"
       ),
       args: "--schedule",
-      interpreter: "C:/Users/Στέφανος/AppData/Local/Programs/Python/Python313/python.exe",
-      cwd: path.resolve(__dirname, ".."),  // parent dir (AGENTI_SDK/aclaude)
+      interpreter: pythonPath,
+      cwd: __dirname,
 
       env: {
         PYTHONUNBUFFERED: "1",
@@ -138,9 +142,9 @@ module.exports = {
       min_uptime: "10s",
       restart_delay: 10000,
 
-      log_file: "./proactive/logs/digest-combined.log",
-      out_file: "./proactive/logs/digest-out.log",
-      error_file: "./proactive/logs/digest-error.log",
+      log_file: "./logs/digest-combined.log",
+      out_file: "./logs/digest-out.log",
+      error_file: "./logs/digest-error.log",
       log_date_format: "YYYY-MM-DD HH:mm:ss",
       merge_logs: true,
       max_memory_restart: "200M",

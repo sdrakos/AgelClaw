@@ -38,7 +38,7 @@ from agent_config import (
     PROACTIVE_DIR, SHARED_SESSION_ID, get_agent, get_router,
     ALLOWED_TOOLS,
 )
-from core.config import load_config
+from core.config import load_config, save_config, save_env_file
 from core.agent_router import Provider
 from memory import Memory
 
@@ -105,6 +105,132 @@ async def get_config():
         "has_claude_key": bool(cfg.get("anthropic_api_key")),
         "has_openai_key": bool(cfg.get("openai_api_key")),
     }
+
+
+# ── Settings API ─────────────────────────────────────────────────────
+def _mask_key(key: str) -> str:
+    """Mask a secret key for display (show first 4 and last 4 chars)."""
+    if not key or len(key) < 8:
+        return ""
+    return key[:4] + "***" + key[-4:]
+
+
+@app.get("/api/settings")
+async def get_settings():
+    """Return config with masked secrets."""
+    cfg = load_config(force_reload=True)
+    return {
+        "anthropic_api_key": _mask_key(cfg.get("anthropic_api_key", "")),
+        "openai_api_key": _mask_key(cfg.get("openai_api_key", "")),
+        "default_provider": cfg.get("default_provider", "claude"),
+        "telegram_bot_token": _mask_key(cfg.get("telegram_bot_token", "")),
+        "telegram_allowed_users": cfg.get("telegram_allowed_users", ""),
+        "outlook_client_id": _mask_key(cfg.get("outlook_client_id", "")),
+        "outlook_client_secret": _mask_key(cfg.get("outlook_client_secret", "")),
+        "outlook_tenant_id": cfg.get("outlook_tenant_id", ""),
+        "outlook_user_email": cfg.get("outlook_user_email", ""),
+        "api_port": cfg.get("api_port", 8000),
+        "daemon_port": cfg.get("daemon_port", 8420),
+        "cost_limit_daily": cfg.get("cost_limit_daily", 10.0),
+        "max_concurrent_tasks": cfg.get("max_concurrent_tasks", 3),
+        "check_interval": cfg.get("check_interval", 300),
+        # Meta flags
+        "is_configured": bool(cfg.get("anthropic_api_key") or cfg.get("openai_api_key")),
+        "has_telegram": bool(cfg.get("telegram_bot_token")),
+        "has_outlook": bool(cfg.get("outlook_client_id")),
+    }
+
+
+@app.post("/api/settings")
+async def post_settings(data: dict):
+    """Save config. Skips masked values (containing '***')."""
+    cfg = load_config(force_reload=True)
+
+    for key, value in data.items():
+        # Skip meta flags and masked values
+        if key.startswith("is_") or key.startswith("has_"):
+            continue
+        if isinstance(value, str) and "***" in value:
+            continue
+        cfg[key] = value
+
+    save_config(cfg)
+    save_env_file(cfg)
+    return {"status": "saved"}
+
+
+@app.get("/api/services/status")
+async def services_status():
+    """Check which services are currently running via port check."""
+    import socket
+
+    cfg = load_config()
+
+    def _port_open(port: int) -> bool:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.5)
+                return s.connect_ex(("127.0.0.1", port)) == 0
+        except Exception:
+            return False
+
+    return {
+        "api_server": True,  # We're responding, so it's running
+        "daemon": _port_open(cfg.get("daemon_port", 8420)),
+        "telegram": False,  # TODO: check telegram bot process
+    }
+
+
+@app.post("/api/services/{service}/{action}")
+async def control_service(service: str, action: str):
+    """Start/stop/restart a service. service: daemon|telegram|all. action: start|stop|restart."""
+    import subprocess
+
+    cfg = load_config()
+    results = {}
+
+    services_to_act = [service] if service != "all" else ["daemon", "telegram"]
+
+    for svc in services_to_act:
+        try:
+            if action in ("stop", "restart"):
+                # Try to kill existing process by finding the port
+                if svc == "daemon":
+                    port = cfg.get("daemon_port", 8420)
+                    if sys.platform == "win32":
+                        subprocess.run(
+                            f'for /f "tokens=5" %a in (\'netstat -aon ^| findstr :{port}\') do taskkill /F /PID %a',
+                            shell=True, capture_output=True,
+                        )
+                    else:
+                        subprocess.run(f"fuser -k {port}/tcp", shell=True, capture_output=True)
+                results[svc] = "stopped"
+
+            if action in ("start", "restart"):
+                script = {
+                    "daemon": "daemon_v2.py",
+                    "telegram": "telegram_bot.py",
+                }.get(svc)
+                if script:
+                    script_path = PROACTIVE_DIR / script
+                    if script_path.exists():
+                        python = sys.executable
+                        subprocess.Popen(
+                            [python, str(script_path)],
+                            cwd=str(PROACTIVE_DIR),
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                        )
+                        results[svc] = "started"
+                    else:
+                        results[svc] = f"script not found: {script}"
+                else:
+                    results[svc] = f"unknown service: {svc}"
+        except Exception as e:
+            results[svc] = f"error: {e}"
+
+    return {"results": results}
 
 
 @app.get("/api/skills")

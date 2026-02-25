@@ -15,6 +15,7 @@ const sections = [
     label: 'Settings',
     items: [
       { id: 'models', icon: '🤖', label: 'Models' },
+      { id: 'settings', icon: '⚙️', label: 'Settings' },
     ],
   },
 ];

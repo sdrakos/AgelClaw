@@ -9,6 +9,9 @@ reports/
 tasks/
 nul
 
+# Virtual environment
+.venv/
+
 # Python
 __pycache__/
 *.pyc
@@ -16,7 +19,6 @@ __pycache__/
 
 # Node
 react-claude-chat/node_modules/
-react-claude-chat/dist/
 
 # OS
 .DS_Store

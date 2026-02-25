@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import MessageList from './components/MessageList';
@@ -6,6 +6,7 @@ import InputArea from './components/InputArea';
 import DaemonLogs from './components/DaemonLogs';
 import SkillsPage from './components/SkillsPage';
 import ModelsPage from './components/ModelsPage';
+import SettingsPage from './components/SettingsPage';
 import { Message } from './types';
 
 function App() {
@@ -14,7 +15,21 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [showLogs, setShowLogs] = useState(true);
   const [selectedModel, setSelectedModel] = useState('claude-opus-4-6');
+  const [firstRun, setFirstRun] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+
+  // First-run detection: redirect to settings if no API key configured
+  useEffect(() => {
+    fetch('/api/settings')
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data.is_configured) {
+          setActivePage('settings');
+          setFirstRun(true);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const sendMessage = async (content: string) => {
     if (!content.trim() || isLoading) return;
@@ -141,6 +156,8 @@ function App() {
           {activePage === 'models' && (
             <ModelsPage selectedModel={selectedModel} onSelectModel={setSelectedModel} />
           )}
+
+          {activePage === 'settings' && <SettingsPage firstRun={firstRun} />}
 
           {/* Daemon logs panel - only show on chat page */}
           {activePage === 'chat' && showLogs && (
