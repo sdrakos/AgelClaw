@@ -1,0 +1,130 @@
+[
+  {
+    "id": "email-composer",
+    "name": "Email Composer",
+    "description": "Draft, reply to, and manage emails with AI. Supports Outlook and Gmail integration.",
+    "category": "Email",
+    "icon": "mail",
+    "tier": "free"
+  },
+  {
+    "id": "document-writer",
+    "name": "Document Writer",
+    "description": "Generate reports, proposals, and documentation in Markdown or PDF format.",
+    "category": "Documents",
+    "icon": "file-text",
+    "tier": "free"
+  },
+  {
+    "id": "web-crawler",
+    "name": "Web Crawler",
+    "description": "Crawl websites, extract structured data, and build knowledge bases automatically.",
+    "category": "Development",
+    "icon": "globe",
+    "tier": "free"
+  },
+  {
+    "id": "task-scheduler",
+    "name": "Task Scheduler",
+    "description": "Schedule recurring tasks, background jobs, and automated workflows.",
+    "category": "Productivity",
+    "icon": "clock",
+    "tier": "free"
+  },
+  {
+    "id": "code-reviewer",
+    "name": "Code Reviewer",
+    "description": "Analyze code quality, find bugs, and suggest improvements across multiple languages.",
+    "category": "Development",
+    "icon": "code",
+    "tier": "free"
+  },
+  {
+    "id": "data-analyst",
+    "name": "Data Analyst",
+    "description": "Process CSV/Excel files, generate charts, and create data-driven insights.",
+    "category": "Productivity",
+    "icon": "bar-chart",
+    "tier": "free"
+  },
+  {
+    "id": "telegram-bot",
+    "name": "Telegram Bot",
+    "description": "Control your agent remotely via Telegram. Send commands, receive reports.",
+    "category": "Communication",
+    "icon": "send",
+    "tier": "free"
+  },
+  {
+    "id": "memory-manager",
+    "name": "Memory Manager",
+    "description": "Persistent memory across conversations. The agent remembers context and preferences.",
+    "category": "Productivity",
+    "icon": "brain",
+    "tier": "free"
+  },
+  {
+    "id": "linkedin-publisher",
+    "name": "LinkedIn Publisher",
+    "description": "Generate and publish professional LinkedIn articles and posts with AI.",
+    "category": "Email",
+    "icon": "share",
+    "tier": "pro"
+  },
+  {
+    "id": "pdf-generator",
+    "name": "PDF Generator",
+    "description": "Create beautifully formatted PDF reports with charts, tables, and branding.",
+    "category": "Documents",
+    "icon": "file",
+    "tier": "pro"
+  },
+  {
+    "id": "api-integrator",
+    "name": "API Integrator",
+    "description": "Connect to any REST API. Build custom integrations with authentication handling.",
+    "category": "Development",
+    "icon": "zap",
+    "tier": "pro"
+  },
+  {
+    "id": "multi-agent-orchestrator",
+    "name": "Multi-Agent Orchestrator",
+    "description": "Run multiple AI agents in parallel. Coordinate complex workflows across providers.",
+    "category": "Development",
+    "icon": "layers",
+    "tier": "pro"
+  },
+  {
+    "id": "outlook-digest",
+    "name": "Outlook Digest",
+    "description": "Daily email digest with AI summaries of your inbox. Priority sorting included.",
+    "category": "Email",
+    "icon": "inbox",
+    "tier": "pro"
+  },
+  {
+    "id": "grant-writer",
+    "name": "Grant Writer",
+    "description": "AI-assisted grant and proposal writing with EU funding framework knowledge.",
+    "category": "Documents",
+    "icon": "award",
+    "tier": "pro"
+  },
+  {
+    "id": "custom-skill-builder",
+    "name": "Custom Skill Builder",
+    "description": "Create your own skills with a visual editor. Define prompts, tools, and workflows.",
+    "category": "Development",
+    "icon": "wrench",
+    "tier": "enterprise"
+  },
+  {
+    "id": "team-workspace",
+    "name": "Team Workspace",
+    "description": "Shared agent workspace for teams. Collaborate on skills, share memory pools.",
+    "category": "Productivity",
+    "icon": "users",
+    "tier": "enterprise"
+  }
+]
