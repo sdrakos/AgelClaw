@@ -151,5 +151,30 @@ def chat():
     asyncio.run(cli_main())
 
 
+@main.command()
+def update():
+    """Update AgelClaw to the latest version."""
+    import subprocess
+
+    click.echo("Checking for updates...")
+    click.echo()
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "--upgrade",
+         "git+https://github.com/sdrakos/AgelClaw.git"],
+        capture_output=False,
+    )
+    click.echo()
+    if result.returncode == 0:
+        # Show new version
+        from importlib.metadata import version as get_version
+        try:
+            new_ver = get_version("agelclaw")
+        except Exception:
+            new_ver = "unknown"
+        click.echo(f"AgelClaw updated successfully! (v{new_ver})")
+    else:
+        click.echo("Update failed. Check your internet connection and try again.")
+
+
 if __name__ == "__main__":
     main()
