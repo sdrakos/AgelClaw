@@ -15,10 +15,48 @@ Usage:
 
 import os
 import sys
+import socket
+import subprocess
 
 import click
 
 from agelclaw import __version__
+
+
+# ── Daemon auto-start helpers ────────────────────────────
+
+def _port_in_use(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _ensure_daemon(daemon_port: int) -> subprocess.Popen | None:
+    """Start the daemon if it's not already running. Returns the Popen or None."""
+    if _port_in_use(daemon_port):
+        click.echo(f"  Daemon already running on :{daemon_port}")
+        return None
+
+    click.echo(f"  Starting daemon on :{daemon_port} ...")
+    creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "agelclaw", "daemon"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=creation_flags,
+    )
+    click.echo(f"  Daemon started (pid {proc.pid})")
+    return proc
+
+
+def _stop_daemon(proc: subprocess.Popen | None):
+    """Terminate a daemon subprocess if it's still running."""
+    if proc and proc.poll() is None:
+        click.echo("  Stopping daemon ...")
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
 
 @click.group(invoke_without_command=True)
@@ -38,14 +76,21 @@ def main(ctx, home, prompt):
     # No subcommand → interactive chat (like `claude`)
     if ctx.invoked_subcommand is None:
         import asyncio
-        if prompt:
-            # Single-shot mode: agelclaw -p "question"
-            from agelclaw.cli import single_query
-            asyncio.run(single_query(prompt))
-        else:
-            # Pure interactive mode
-            from agelclaw.cli import main as cli_main
-            asyncio.run(cli_main())
+        from agelclaw.core.config import load_config
+        cfg = load_config()
+        daemon_proc = _ensure_daemon(cfg.get("daemon_port", 8420))
+
+        try:
+            if prompt:
+                # Single-shot mode: agelclaw -p "question"
+                from agelclaw.cli import single_query
+                asyncio.run(single_query(prompt))
+            else:
+                # Pure interactive mode
+                from agelclaw.cli import main as cli_main
+                asyncio.run(cli_main())
+        finally:
+            _stop_daemon(daemon_proc)
 
 
 @main.command()
@@ -82,32 +127,57 @@ def daemon():
               help="Serve React build (production) or proxy to Vite (dev).")
 @click.option("--no-open", is_flag=True, default=False,
               help="Don't open browser automatically.")
-def web(production, no_open):
-    """Start the web UI + API server (:8000)."""
+@click.option("--no-daemon", is_flag=True, default=False,
+              help="Don't auto-start the daemon (run web only).")
+def web(production, no_open, no_daemon):
+    """Start the web UI + API server (:8000) and daemon (:8420)."""
     from agelclaw.api_server import app, API_PORT
+    from agelclaw.core.config import load_config
     import threading
     import webbrowser
     import uvicorn
+
+    cfg = load_config()
+    daemon_port = cfg.get("daemon_port", 8420)
+    daemon_proc = None
 
     sys.argv = ["agelclaw-web"]
     if production:
         sys.argv.append("--production")
 
+    if not no_daemon:
+        daemon_proc = _ensure_daemon(daemon_port)
+
     if not no_open:
         def _open_browser():
             import time
-            time.sleep(1.5)  # Wait for uvicorn to start
+            time.sleep(1.5)
             webbrowser.open(f"http://localhost:{API_PORT}")
         threading.Thread(target=_open_browser, daemon=True).start()
 
-    uvicorn.run(app, host="0.0.0.0", port=API_PORT)
+    try:
+        uvicorn.run(app, host="0.0.0.0", port=API_PORT)
+    finally:
+        _stop_daemon(daemon_proc)
 
 
 @main.command()
-def telegram():
-    """Start the Telegram bot."""
+@click.option("--no-daemon", is_flag=True, default=False,
+              help="Don't auto-start the daemon.")
+def telegram(no_daemon):
+    """Start the Telegram bot and daemon (:8420)."""
+    from agelclaw.core.config import load_config
     from agelclaw.telegram_bot import main as telegram_main
-    telegram_main()
+
+    daemon_proc = None
+    if not no_daemon:
+        cfg = load_config()
+        daemon_proc = _ensure_daemon(cfg.get("daemon_port", 8420))
+
+    try:
+        telegram_main()
+    finally:
+        _stop_daemon(daemon_proc)
 
 
 @main.command()

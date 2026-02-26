@@ -690,10 +690,14 @@ async def proxy_daemon(path: str):
     if path == "events":
         # SSE proxy - stream through
         async def stream_sse():
-            async with httpx.AsyncClient() as client:
-                async with client.stream("GET", f"{daemon_base}/events", timeout=None) as resp:
-                    async for chunk in resp.aiter_bytes():
-                        yield chunk
+            try:
+                async with httpx.AsyncClient() as client:
+                    async with client.stream("GET", f"{daemon_base}/events", timeout=None) as resp:
+                        async for chunk in resp.aiter_bytes():
+                            yield chunk
+            except (httpx.ConnectError, httpx.ConnectTimeout):
+                # Daemon not running — send an offline notice and close
+                yield f"data: {json.dumps({'type': 'daemon_offline', 'message': 'Daemon is not running on port ' + str(DAEMON_PORT)})}\n\n"
         return StreamingResponse(
             stream_sse(),
             media_type="text/event-stream",
@@ -701,9 +705,12 @@ async def proxy_daemon(path: str):
         )
     else:
         # Regular JSON proxy
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(f"{daemon_base}/{path}", timeout=10)
-            return resp.json()
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"{daemon_base}/{path}", timeout=10)
+                return resp.json()
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            raise HTTPException(status_code=503, detail=f"Daemon not running on port {DAEMON_PORT}")
 
 
 # ── Serve React build (production) ──────────────────────────────────

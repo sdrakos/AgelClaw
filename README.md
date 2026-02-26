@@ -8,7 +8,7 @@ By **Dr. Stefanos Drakos** | [agel.ai](https://agel.ai)
 
 ## Quick Install (Windows — no experience needed)
 
-Download and double-click **[install.bat](https://github.com/sdrakos/AgelClaw/releases/download/v3.1.0/install.bat)** — it installs everything automatically:
+Download and double-click **[install.bat](https://github.com/sdrakos/AgelClaw/releases/latest/download/install.bat)** — it installs everything automatically:
 
 - Python, Node.js (if missing)
 - Claude Code + login
@@ -28,8 +28,6 @@ After installation, just double-click **AgelClaw** on your Desktop to chat.
 | **Python 3.11+** | [python.org/downloads](https://www.python.org/downloads/) |
 | **Node.js 18+** | [nodejs.org](https://nodejs.org/) |
 | **Claude subscription** | Max or Pro plan at [claude.ai](https://claude.ai/) |
-
-## Installation (5 minutes)
 
 ### Step 1 — Install Claude Code
 
@@ -78,15 +76,17 @@ The setup wizard will:
 ### Step 5 — Start using
 
 ```bash
-# Interactive chat (like claude)
+# Interactive chat — daemon starts automatically
 agelclaw
 
-# Or start the Telegram bot
-agelclaw telegram
-
-# Or start the web UI
+# Web UI + daemon — opens browser
 agelclaw web
+
+# Telegram bot + daemon
+agelclaw telegram
 ```
+
+Every command auto-starts the background daemon if it's not already running, and stops it on exit.
 
 ---
 
@@ -96,7 +96,6 @@ agelclaw web
 
 ```bash
 agelclaw                          # Open interactive chat
-agelclaw "summarize my tasks"     # Chat with initial prompt
 agelclaw -p "what tasks are due?" # Single answer, then exit
 ```
 
@@ -104,14 +103,25 @@ agelclaw -p "what tasks are due?" # Single answer, then exit
 
 | Command | Description |
 |---------|-------------|
-| `agelclaw` | Interactive chat (default) |
+| `agelclaw` | Interactive chat + auto-start daemon |
+| `agelclaw web` | Web UI (`:8000`) + daemon (`:8420`) + browser |
+| `agelclaw telegram` | Telegram bot + daemon (`:8420`) |
+| `agelclaw daemon` | Start daemon only (`:8420`) |
 | `agelclaw init [dir]` | Create project directory with config templates and default skills |
 | `agelclaw setup` | Interactive wizard for Claude auth, API keys, Telegram |
-| `agelclaw daemon` | Start background task daemon (`:8420`) |
-| `agelclaw web` | Start web UI + API server (`:8000`) |
-| `agelclaw telegram` | Start Telegram bot |
 | `agelclaw status` | Show daemon status + task statistics |
+| `agelclaw update` | Update to the latest version |
 | `agelclaw --version` | Show version |
+
+### Flags
+
+| Flag | Available on | Description |
+|------|-------------|-------------|
+| `--no-daemon` | `web`, `telegram` | Don't auto-start the daemon |
+| `--no-open` | `web` | Don't open browser automatically |
+| `--dev` | `web` | Dev mode (proxy to Vite instead of serving build) |
+| `--home PATH` | all | Override project directory |
+| `-p "prompt"` | `agelclaw` | Single-shot mode — answer and exit |
 
 ### Memory CLI (used by agents internally)
 
@@ -171,6 +181,19 @@ All channels share the same memory and conversation history:
 - **CLI** — Interactive terminal chat
 - **Daemon** — Autonomous background task execution
 
+### Subagents
+
+Create specialized agents with their own system prompts, tools, and provider preferences:
+
+```
+~/.agelclaw/subagents/
+├── researcher/SUBAGENT.md
+├── writer/SUBAGENT.md
+└── coder/SUBAGENT.md
+```
+
+Tasks can be assigned to subagents for isolated, specialized execution.
+
 ## Project Directory Resolution
 
 The project directory (where all mutable data lives) is resolved in this order:
@@ -179,7 +202,7 @@ The project directory (where all mutable data lives) is resolved in this order:
 2. Current directory if it contains `config.yaml` or `.agelclaw` marker
 3. `~/.agelclaw/` default
 
-You can override per-command: `agelclaw --home /path/to/project daemon`
+You can override per-command: `agelclaw --home /path/to/project web`
 
 ## Optional Dependencies
 
