@@ -1,22 +1,19 @@
 @echo off
-chcp 65001 >nul 2>&1
 title AgelClaw Installer
 color 0A
 
 echo.
-echo  ╔══════════════════════════════════════════╗
-echo  ║       AgelClaw — One-Click Installer     ║
-echo  ║  Self-evolving AI Agent for your desktop  ║
-echo  ╚══════════════════════════════════════════╝
+echo  ==========================================
+echo       AgelClaw - One-Click Installer
+echo   Self-evolving AI Agent for your desktop
+echo  ==========================================
 echo.
 echo  This will install everything you need.
 echo  Just follow the prompts.
 echo.
 pause
 
-:: ─────────────────────────────────────────
 :: Step 1: Check Python
-:: ─────────────────────────────────────────
 echo.
 echo  [1/6] Checking Python...
 python --version >nul 2>&1
@@ -32,16 +29,13 @@ if %errorlevel% neq 0 (
         pause
         exit /b 1
     )
-    echo  Python installed. Restarting installer to pick up PATH changes...
-    echo  Please close this window and double-click install.bat again.
+    echo  Python installed. Please close this window and double-click install.bat again.
     pause
     exit /b 0
 )
 for /f "tokens=*" %%i in ('python --version 2^>^&1') do echo  OK: %%i
 
-:: ─────────────────────────────────────────
 :: Step 2: Check Node.js
-:: ─────────────────────────────────────────
 echo.
 echo  [2/6] Checking Node.js...
 node --version >nul 2>&1
@@ -56,16 +50,13 @@ if %errorlevel% neq 0 (
         pause
         exit /b 1
     )
-    echo  Node.js installed. Restarting installer to pick up PATH changes...
-    echo  Please close this window and double-click install.bat again.
+    echo  Node.js installed. Please close this window and double-click install.bat again.
     pause
     exit /b 0
 )
 for /f "tokens=*" %%i in ('node --version 2^>^&1') do echo  OK: Node.js %%i
 
-:: ─────────────────────────────────────────
 :: Step 3: Install Claude Code
-:: ─────────────────────────────────────────
 echo.
 echo  [3/6] Installing Claude Code...
 call npm install -g @anthropic-ai/claude-code 2>nul
@@ -81,21 +72,16 @@ if %errorlevel% neq 0 (
 )
 for /f "tokens=*" %%i in ('claude --version 2^>^&1') do echo  OK: Claude Code %%i
 
-:: ─────────────────────────────────────────
 :: Step 4: Claude Login
-:: ─────────────────────────────────────────
 echo.
 echo  [4/6] Checking Claude subscription...
-
-:: Check if already logged in
 claude auth status 2>nul | findstr /C:"loggedIn" /C:"true" >nul 2>&1
 if %errorlevel% equ 0 (
     echo  Already logged in!
-    for /f "tokens=*" %%i in ('claude auth status 2^>^&1') do echo  %%i
 ) else (
     echo.
     echo  You need to log in to your Claude account.
-    echo  A browser window will open — sign in with your Max or Pro account.
+    echo  A browser window will open - sign in with your Max or Pro account.
     echo.
     pause
     call claude auth login
@@ -105,9 +91,7 @@ if %errorlevel% equ 0 (
     )
 )
 
-:: ─────────────────────────────────────────
 :: Step 5: Install AgelClaw
-:: ─────────────────────────────────────────
 echo.
 echo  [5/6] Installing AgelClaw...
 pip install "git+https://github.com/sdrakos/AgelClaw.git" 2>&1
@@ -120,17 +104,13 @@ if %errorlevel% neq 0 (
 )
 for /f "tokens=*" %%i in ('agelclaw --version 2^>^&1') do echo  OK: %%i
 
-:: ─────────────────────────────────────────
 :: Step 6: Initialize
-:: ─────────────────────────────────────────
 echo.
 echo  [6/6] Setting up AgelClaw...
 agelclaw init
 echo.
 
-:: ─────────────────────────────────────────
 :: Create desktop shortcut
-:: ─────────────────────────────────────────
 echo  Creating desktop shortcut...
 set "DESKTOP=%USERPROFILE%\Desktop"
 (
@@ -141,28 +121,21 @@ echo pause
 ) > "%DESKTOP%\AgelClaw.bat"
 echo  Shortcut created: %DESKTOP%\AgelClaw.bat
 
-:: ─────────────────────────────────────────
-:: Done!
-:: ─────────────────────────────────────────
+:: Done
 echo.
-echo  ╔══════════════════════════════════════════╗
-echo  ║         Installation Complete!           ║
-echo  ╚══════════════════════════════════════════╝
+echo  ==========================================
+echo          Installation Complete!
+echo  ==========================================
 echo.
 echo  What to do now:
 echo.
 echo    1. Run "agelclaw setup" to configure API keys
-echo       (or double-click AgelClaw on your Desktop to chat)
-echo.
 echo    2. Type "agelclaw" to start chatting
+echo    3. Or double-click AgelClaw on your Desktop
 echo.
-echo    3. Optional: "agelclaw telegram" for Telegram bot
-echo.
-echo  ─────────────────────────────────────────
 echo  Need help? Visit: https://github.com/sdrakos/AgelClaw
 echo.
 
-:: Ask if they want to run setup now
 set /p RUNSETUP="  Run setup wizard now? (Y/n): "
 if /i "%RUNSETUP%" neq "n" (
     echo.
