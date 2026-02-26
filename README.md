@@ -8,7 +8,7 @@ By **Dr. Stefanos Drakos** | [agel.ai](https://agel.ai)
 
 ## Quick Install (Windows — no experience needed)
 
-Download and double-click **[install.bat](https://raw.githubusercontent.com/sdrakos/AgelClaw/main/install.bat)** — it installs everything automatically:
+Download and double-click **[install.bat](https://github.com/sdrakos/AgelClaw/releases/download/v3.1.0/install.bat)** — it installs everything automatically:
 
 - Python, Node.js (if missing)
 - Claude Code + login

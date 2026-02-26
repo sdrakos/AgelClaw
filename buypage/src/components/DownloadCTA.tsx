@@ -1,4 +1,4 @@
-const INSTALLER_URL = 'https://raw.githubusercontent.com/sdrakos/AgelClaw/main/install.bat'
+const INSTALLER_URL = 'https://github.com/sdrakos/AgelClaw/releases/download/v3.1.0/install.bat'
 const GITHUB_URL = 'https://github.com/sdrakos/AgelClaw'
 
 function DownloadCTA() {

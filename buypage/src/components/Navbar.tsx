@@ -39,7 +39,7 @@ function Navbar() {
               </Link>
             ))}
             <a
-              href="https://raw.githubusercontent.com/sdrakos/AgelClaw/main/install.bat"
+              href="https://github.com/sdrakos/AgelClaw/releases/download/v3.1.0/install.bat"
               target="_blank"
               rel="noopener noreferrer"
               className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition-colors"
@@ -77,7 +77,7 @@ function Navbar() {
               </Link>
             ))}
             <a
-              href="https://raw.githubusercontent.com/sdrakos/AgelClaw/main/install.bat"
+              href="https://github.com/sdrakos/AgelClaw/releases/download/v3.1.0/install.bat"
               target="_blank"
               rel="noopener noreferrer"
               className="block mx-4 mt-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg text-center"
