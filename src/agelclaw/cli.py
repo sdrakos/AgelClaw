@@ -13,6 +13,7 @@ This CLI lets you:
 
 import asyncio
 import json
+import os
 import sys
 import io
 from datetime import datetime
@@ -206,39 +207,69 @@ async def single_query(prompt: str):
     memory.log_conversation(role="assistant", content=response[:2000])
 
 
+def _print_banner():
+    """Print Claude Code-style startup banner."""
+    from agelclaw import __version__
+
+    # Colors (ANSI)
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    CYAN = "\033[36m"
+    GREEN = "\033[32m"
+    YELLOW = "\033[33m"
+    MAGENTA = "\033[35m"
+    RESET = "\033[0m"
+
+    project = str(PROACTIVE_DIR)
+
+    # Task stats
+    stats = memory.get_task_stats()
+    due = memory.get_due_tasks()
+    pending = stats.get("pending", 0)
+    completed = stats.get("completed", 0)
+
+    print()
+    print(f"  {MAGENTA}{BOLD}AgelClaw{RESET} {DIM}v{__version__}{RESET}")
+    print(f"  {DIM}Claude Agent SDK · Persistent Memory{RESET}")
+    print(f"  {DIM}{project}{RESET}")
+    print()
+
+    # Status line
+    parts = []
+    if pending:
+        parts.append(f"{YELLOW}{pending} pending{RESET}")
+    if completed:
+        parts.append(f"{GREEN}{completed} completed{RESET}")
+    if due:
+        parts.append(f"{CYAN}{len(due)} due now{RESET}")
+
+    if parts:
+        print(f"  {' · '.join(parts)}")
+        print()
+
+
 async def main(initial_prompt: str = None):
     # Fix Windows console encoding
     if sys.platform == "win32":
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+        # Enable ANSI colors on Windows
+        os.system("")
 
-    print("AgelClaw — Self-Evolving Assistant")
-    print("   Memory: persistent (SQLite)")
-    print("   Type 'quit' to exit, or just chat.")
-    print()
-
-    # Show quick status
-    stats = memory.get_task_stats()
-    due = memory.get_due_tasks()
-    print(f"   Tasks: {stats.get('pending', 0)} pending, "
-          f"{stats.get('completed', 0)} completed, "
-          f"{stats.get('failed', 0)} failed")
-    if due:
-        print(f"   {len(due)} tasks are due now!")
-    print()
+    _print_banner()
 
     # Process initial prompt if provided (agelclaw "do something")
     if initial_prompt:
-        print(f"You: {initial_prompt}")
+        print(f"\033[1m> \033[0m{initial_prompt}")
         memory.log_conversation(role="user", content=initial_prompt)
-        print("\nAgent: ", end="", flush=True)
+        print()
         response = await run_query(initial_prompt)
         print("\n")
         memory.log_conversation(role="assistant", content=response[:2000])
 
     while True:
         try:
-            user_input = input("You: ").strip()
+            user_input = input("\033[1m> \033[0m").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nBye!")
             break
@@ -260,7 +291,7 @@ async def main(initial_prompt: str = None):
         memory.log_conversation(role="user", content=user_input)
 
         # Send to agent
-        print("\nAgent: ", end="", flush=True)
+        print()
         response = await run_query(user_input)
         print("\n")
 
