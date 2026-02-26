@@ -86,6 +86,9 @@ task_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 # Track which task IDs are currently running (prevent duplicate execution)
 running_task_ids: set[int] = set()
 
+# Track asyncio.Task references for cancellation support
+running_asyncio_tasks: dict[int, asyncio.Task] = {}
+
 # Current status — tracks multiple running tasks
 agent_status = {
     "state": "idle",          # idle | running
@@ -118,6 +121,10 @@ def send_telegram_notification(task_id: int, task_title: str, status: str, resul
 
         if status == "completed":
             icon = "\u2705"
+        elif status == "cancelled":
+            icon = "\u26d4"
+        elif status == "started":
+            icon = "\u25b6\ufe0f"
         else:
             icon = "\u274c"
         dur_str = f" ({duration:.0f}\u03b4\u03b5\u03c5\u03c4.)" if duration else ""
@@ -419,6 +426,7 @@ async def execute_single_task(task: dict, cycle_session: str):
             "task_title": task_title,
             "cycle_session": cycle_session,
         })
+        send_telegram_notification(task_id, task_title, "started", "Started executing...")
 
         # Build a focused prompt for this single task
         context = memory.build_context_summary()
@@ -592,6 +600,19 @@ async def execute_single_task(task: dict, cycle_session: str):
                 duration=duration
             )
 
+        except asyncio.CancelledError:
+            duration = (datetime.now() - task_start).total_seconds()
+            log.info(f"[Task #{task_id}] Cancelled by user after {duration:.1f}s")
+            memory.update_task(task_id, status="cancelled", result="Cancelled by user")
+            _broadcast_event("task_cancelled", {
+                "session_id": session_id,
+                "task_id": task_id,
+                "task_title": task_title,
+                "duration_s": round(duration, 1),
+            })
+            send_telegram_notification(task_id, task_title, "cancelled", "Ακυρώθηκε από τον χρήστη", duration)
+            raise  # Re-raise so gather() sees it
+
         except Exception as e:
             duration = (datetime.now() - task_start).total_seconds()
             log.error(f"[Task #{task_id}] Error: {e}", exc_info=True)
@@ -623,6 +644,7 @@ async def execute_single_task(task: dict, cycle_session: str):
         finally:
             # Clean up running state
             running_task_ids.discard(task_id)
+            running_asyncio_tasks.pop(task_id, None)
             agent_status["running_tasks"].pop(task_id, None)
             if not agent_status["running_tasks"]:
                 agent_status["state"] = "idle"
@@ -659,6 +681,7 @@ async def execute_subagent_task(task: dict, cycle_session: str):
             "subagent": subagent_name,
             "cycle_session": cycle_session,
         })
+        send_telegram_notification(task_id, task_title, "started", f"Started executing (subagent: {subagent_name})...")
 
         # Parse subagent definition
         sa = _parse_subagent_md(subagent_name)
@@ -863,6 +886,20 @@ async def execute_subagent_task(task: dict, cycle_session: str):
             send_task_notification(task_id=task_id, task_title=task_title, status="completed", result=summary, duration=duration)
             send_telegram_notification(task_id=task_id, task_title=task_title, status="completed", result=summary, duration=duration)
 
+        except asyncio.CancelledError:
+            duration = (datetime.now() - task_start).total_seconds()
+            log.info(f"[Subagent '{subagent_name}' Task #{task_id}] Cancelled by user after {duration:.1f}s")
+            memory.update_task(task_id, status="cancelled", result="Cancelled by user")
+            _broadcast_event("task_cancelled", {
+                "session_id": session_id,
+                "task_id": task_id,
+                "task_title": task_title,
+                "subagent": subagent_name,
+                "duration_s": round(duration, 1),
+            })
+            send_telegram_notification(task_id, task_title, "cancelled", "Ακυρώθηκε από τον χρήστη", duration)
+            raise  # Re-raise so gather() sees it
+
         except Exception as e:
             duration = (datetime.now() - task_start).total_seconds()
             log.error(f"[Subagent '{subagent_name}' Task #{task_id}] Error: {e}", exc_info=True)
@@ -880,6 +917,7 @@ async def execute_subagent_task(task: dict, cycle_session: str):
 
         finally:
             running_task_ids.discard(task_id)
+            running_asyncio_tasks.pop(task_id, None)
             agent_status["running_tasks"].pop(task_id, None)
             if not agent_status["running_tasks"]:
                 agent_status["state"] = "idle"
@@ -941,10 +979,12 @@ async def run_agent_cycle(reason: str = "scheduled"):
     for t in tasks_to_run:
         if t.get("assigned_to"):
             log.info(f"  Routing Task #{t['id']} to execute_subagent_task('{t['assigned_to']}')")
-            coros.append(execute_subagent_task(t, cycle_session))
+            atask = asyncio.create_task(execute_subagent_task(t, cycle_session))
         else:
             log.info(f"  Routing Task #{t['id']} to execute_single_task()")
-            coros.append(execute_single_task(t, cycle_session))
+            atask = asyncio.create_task(execute_single_task(t, cycle_session))
+        running_asyncio_tasks[t["id"]] = atask
+        coros.append(atask)
     await asyncio.gather(*coros, return_exceptions=True)
 
     duration = (datetime.now() - cycle_start).total_seconds()
@@ -1198,9 +1238,10 @@ async def execute_task(task_id: int):
     # Execute the task immediately (in background) — route to subagent if assigned
     cycle_session = f"manual_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     if task.get("assigned_to"):
-        asyncio.create_task(execute_subagent_task(task, cycle_session))
+        atask = asyncio.create_task(execute_subagent_task(task, cycle_session))
     else:
-        asyncio.create_task(execute_single_task(task, cycle_session))
+        atask = asyncio.create_task(execute_single_task(task, cycle_session))
+    running_asyncio_tasks[task_id] = atask
 
     return {
         "success": True,
@@ -1214,6 +1255,72 @@ async def wake_agent():
     """Manually trigger an agent cycle right now."""
     wake_event.set()
     return {"message": "Agent waking up!"}
+
+
+@app.get("/running")
+async def get_running_tasks():
+    """Get currently running tasks."""
+    return agent_status["running_tasks"]
+
+
+@app.post("/tasks/{task_id}/cancel")
+async def cancel_running_task(task_id: int):
+    """Cancel a currently running task."""
+    if task_id not in running_task_ids:
+        raise HTTPException(status_code=404, detail=f"Task #{task_id} is not running")
+
+    atask = running_asyncio_tasks.get(task_id)
+    if atask and not atask.done():
+        atask.cancel()
+        # Wait briefly for cleanup
+        try:
+            await asyncio.wait_for(asyncio.shield(atask), timeout=5)
+        except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+            pass
+
+    return {"message": f"Task #{task_id} cancelled"}
+
+
+class TaskUpdateMessage(BaseModel):
+    message: str
+
+
+@app.post("/tasks/{task_id}/update")
+async def update_running_task(task_id: int, req: TaskUpdateMessage):
+    """Send an update to a running task. Cancels current execution and restarts with updated instructions."""
+    task = memory.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task #{task_id} not found")
+
+    was_running = task_id in running_task_ids
+
+    # Cancel if running
+    if was_running:
+        atask = running_asyncio_tasks.get(task_id)
+        if atask and not atask.done():
+            atask.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(atask), timeout=5)
+            except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+                pass
+
+    # Append update to task description
+    now = datetime.now().isoformat()
+    updated_desc = task["description"] + f"\n\n--- USER UPDATE ({now}) ---\n{req.message}"
+    memory.update_task(task_id, description=updated_desc, status="pending")
+
+    # Log the update
+    memory.log_conversation(
+        role="user",
+        content=f"Update for Task #{task_id}: {req.message}",
+        session_id=f"task_update_{task_id}",
+    )
+
+    # Re-execute immediately
+    wake_event.set()
+
+    action = "restarted with update" if was_running else "updated (will execute on next cycle)"
+    return {"message": f"Task #{task_id} {action}", "update": req.message}
 
 
 @app.get("/history")

@@ -7,7 +7,7 @@ import DaemonLogs from './components/DaemonLogs';
 import SkillsPage from './components/SkillsPage';
 import ModelsPage from './components/ModelsPage';
 import SettingsPage from './components/SettingsPage';
-import { Message } from './types';
+import { Message, FileAttachment } from './types';
 
 function App() {
   const [activePage, setActivePage] = useState('chat');
@@ -31,14 +31,90 @@ function App() {
       .catch(() => {});
   }, []);
 
-  const sendMessage = async (content: string) => {
-    if (!content.trim() || isLoading) return;
+  const processSSEStream = async (
+    response: Response,
+    assistantId: string,
+  ) => {
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('No response stream');
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let fullText = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6).trim();
+        if (data === '[DONE]') continue;
+
+        try {
+          const event = JSON.parse(data);
+          if (event.type === 'text') {
+            fullText += event.content;
+            setMessages(prev =>
+              prev.map(m =>
+                m.id === assistantId ? { ...m, content: fullText } : m,
+              ),
+            );
+          } else if (event.type === 'error') {
+            fullText += `\n\n**Error:** ${event.content}`;
+            setMessages(prev =>
+              prev.map(m =>
+                m.id === assistantId ? { ...m, content: fullText } : m,
+              ),
+            );
+          }
+        } catch {
+          // skip malformed JSON
+        }
+      }
+    }
+
+    if (!fullText) {
+      setMessages(prev =>
+        prev.map(m =>
+          m.id === assistantId
+            ? { ...m, content: 'No response received from agent.' }
+            : m,
+        ),
+      );
+    }
+  };
+
+  const sendMessage = async (content: string, file?: File) => {
+    if ((!content.trim() && !file) || isLoading) return;
+
+    // Build user message with optional attachment info
+    const attachment: FileAttachment | undefined = file
+      ? { name: file.name, size: file.size, type: file.type }
+      : undefined;
+
+    // Generate image preview for user message display
+    if (file && file.type.startsWith('image/')) {
+      const previewUrl = URL.createObjectURL(file);
+      if (attachment) attachment.previewUrl = previewUrl;
+    }
+
+    const displayContent = file
+      ? content.trim()
+        ? `${content.trim()}`
+        : `Sent file: ${file.name}`
+      : content.trim();
 
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
-      content: content.trim(),
+      content: displayContent,
       timestamp: new Date(),
+      attachment,
     };
 
     setMessages(prev => [...prev, userMessage]);
@@ -53,71 +129,36 @@ function App() {
     try {
       abortRef.current = new AbortController();
 
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: content.trim(),
-          model: selectedModel,
-          history: messages.map(m => ({ role: m.role, content: m.content })),
-        }),
-        signal: abortRef.current.signal,
-      });
+      let response: Response;
+
+      if (file) {
+        // File upload — multipart form POST to /api/upload
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('message', content.trim());
+
+        response = await fetch('/api/upload', {
+          method: 'POST',
+          body: formData,
+          signal: abortRef.current.signal,
+        });
+      } else {
+        // Normal text chat
+        response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: content.trim(),
+            model: selectedModel,
+            history: messages.map(m => ({ role: m.role, content: m.content })),
+          }),
+          signal: abortRef.current.signal,
+        });
+      }
 
       if (!response.ok) throw new Error(`Server error: ${response.status}`);
 
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('No response stream');
-
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let fullText = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const data = line.slice(6).trim();
-          if (data === '[DONE]') continue;
-
-          try {
-            const event = JSON.parse(data);
-            if (event.type === 'text') {
-              fullText += event.content;
-              setMessages(prev =>
-                prev.map(m =>
-                  m.id === assistantId ? { ...m, content: fullText } : m,
-                ),
-              );
-            } else if (event.type === 'error') {
-              fullText += `\n\n**Error:** ${event.content}`;
-              setMessages(prev =>
-                prev.map(m =>
-                  m.id === assistantId ? { ...m, content: fullText } : m,
-                ),
-              );
-            }
-          } catch {
-            // skip malformed JSON
-          }
-        }
-      }
-
-      if (!fullText) {
-        setMessages(prev =>
-          prev.map(m =>
-            m.id === assistantId
-              ? { ...m, content: 'No response received from agent.' }
-              : m,
-          ),
-        );
-      }
+      await processSSEStream(response, assistantId);
     } catch (error) {
       if ((error as Error).name === 'AbortError') return;
       const errorText = `Error: ${error instanceof Error ? error.message : 'Failed to get response'}`;

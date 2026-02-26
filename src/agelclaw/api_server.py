@@ -13,13 +13,14 @@ Usage:
 
 import asyncio
 import json
+import re
 import sys
 import io
 import os
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -43,7 +44,7 @@ from agelclaw.core.agent_router import Provider
 from agelclaw.memory import Memory
 
 # ── Config ───────────────────────────────────────────────────────────
-from agelclaw.project import get_react_dist_dir
+from agelclaw.project import get_react_dist_dir, get_project_dir
 REACT_BUILD_DIR = get_react_dist_dir()
 _cfg = load_config()
 API_PORT = _cfg.get("api_port", 8000)
@@ -73,6 +74,69 @@ class ChatRequest(BaseModel):
     message: str
     history: list[ChatMessage] = []
     provider: str | None = None  # "claude" | "openai" | "auto" | None (uses default)
+
+
+# ── Chat-based task control (natural language stop/update) ───────────
+
+_STOP_PATTERNS = [
+    re.compile(r"(?:σταμ[αά]τ[αη]|σταμάτησε|ακύρωσε|ακυρωσε|cancel|stop|kill|abort)\s+(?:(?:το\s+)?(?:task|#)\s*(\d+)|(\d+))", re.IGNORECASE),
+    re.compile(r"(?:task|#)\s*(\d+)\s+(?:σταμ[αά]τ[αη]|cancel|stop|kill|abort)", re.IGNORECASE),
+]
+
+_UPDATE_PATTERNS = [
+    re.compile(r"(?:άλλαξε|αλλαξε|update|change)\s+(?:(?:το\s+)?(?:task|#)\s*(\d+)|(\d+))\s+(.+)", re.IGNORECASE | re.DOTALL),
+    re.compile(r"(?:task|#)\s*(\d+)\s+(?:άλλαξε|αλλαξε|update|change)\s+(.+)", re.IGNORECASE | re.DOTALL),
+    re.compile(r"(?:στο\s+)?(?:task|#)\s*(\d+)\s*[,:]\s+(.+)", re.IGNORECASE | re.DOTALL),
+]
+
+
+def _detect_stop_intent(text: str) -> int | None:
+    for pat in _STOP_PATTERNS:
+        m = pat.search(text)
+        if m:
+            for g in m.groups():
+                if g and g.isdigit():
+                    return int(g)
+    return None
+
+
+def _detect_update_intent(text: str) -> tuple[int, str] | None:
+    for pat in _UPDATE_PATTERNS:
+        m = pat.search(text)
+        if m:
+            groups = m.groups()
+            task_id = None
+            msg = None
+            for g in groups:
+                if g is None:
+                    continue
+                if g.strip().isdigit() and task_id is None:
+                    task_id = int(g.strip())
+                elif task_id is not None:
+                    msg = g.strip()
+                    break
+            if task_id and msg:
+                return (task_id, msg)
+    return None
+
+
+async def _daemon_request(method: str, path: str, json_data: dict = None) -> dict | None:
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            url = f"http://localhost:{DAEMON_PORT}{path}"
+            if method == "GET":
+                resp = await client.get(url)
+            else:
+                resp = await client.post(url, json=json_data)
+            return {"status_code": resp.status_code, "data": resp.json()}
+    except Exception:
+        return None
+
+
+def _get_uploads_dir() -> Path:
+    d = get_project_dir() / "uploads"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 # ── API Endpoints ────────────────────────────────────────────────────
@@ -296,8 +360,44 @@ async def skills():
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
-    """Stream agent response via SSE. Supports provider selection."""
+    """Stream agent response via SSE. Supports provider selection.
 
+    Also intercepts stop/update intents for running daemon tasks.
+    """
+    # ── Check for stop intent
+    stop_id = _detect_stop_intent(req.message)
+    if stop_id is not None:
+        result = await _daemon_request("POST", f"/tasks/{stop_id}/cancel")
+        async def stop_stream():
+            if result is None:
+                msg = f"Cannot reach daemon to cancel task #{stop_id}."
+            elif result["status_code"] == 200:
+                msg = f"Task #{stop_id} cancelled."
+            else:
+                msg = f"Error: {result['data'].get('detail', 'Unknown error')}"
+            yield f"data: {json.dumps({'type': 'text', 'content': msg})}\n\n"
+            yield "data: [DONE]\n\n"
+        return StreamingResponse(stop_stream(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    # ── Check for update intent
+    update_intent = _detect_update_intent(req.message)
+    if update_intent is not None:
+        task_id, update_msg = update_intent
+        result = await _daemon_request("POST", f"/tasks/{task_id}/update", {"message": update_msg})
+        async def update_stream():
+            if result is None:
+                msg = f"Cannot reach daemon to update task #{task_id}."
+            elif result["status_code"] == 200:
+                msg = f"Task #{task_id}: {result['data'].get('message', 'updated')}"
+            else:
+                msg = f"Error: {result['data'].get('detail', 'Unknown error')}"
+            yield f"data: {json.dumps({'type': 'text', 'content': msg})}\n\n"
+            yield "data: [DONE]\n\n"
+        return StreamingResponse(update_stream(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    # ── Normal agent query
     # Build prompt with conversation context (shared across web + telegram)
     prompt_text = build_prompt_with_history(req.message, memory)
 
@@ -358,6 +458,96 @@ async def chat(req: ChatRequest):
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+# ── File Upload Endpoint ─────────────────────────────────────────────
+
+@app.post("/api/upload")
+async def upload_file(
+    file: UploadFile = File(...),
+    message: str = Form(""),
+    provider: str | None = Form(None),
+):
+    """Upload a file and process it through the agent.
+
+    The file is saved to uploads/ and a prompt is built telling the agent
+    to read/analyze the file. Response is streamed via SSE.
+    """
+    # Save the file
+    uploads = _get_uploads_dir()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_name = re.sub(r'[^\w\-.]', '_', file.filename or "unknown")
+    dest = uploads / f"{timestamp}_{safe_name}"
+
+    content = await file.read()
+    dest.write_bytes(content)
+    file_size = len(content)
+
+    # Build prompt with file info
+    user_text = (
+        f"User uploaded a file: {file.filename} ({file_size} bytes, type: {file.content_type})\n"
+        f"Saved at: {dest}\n"
+    )
+    if message:
+        user_text += f"User message: {message}\n"
+    user_text += "Read the file and respond to the user about its contents."
+
+    prompt_text = build_prompt_with_history(user_text, memory)
+
+    # Route to provider
+    router = get_router()
+    route = router.route(task_type="chat", prefer=provider)
+
+    async def generate():
+        full_response = []
+
+        try:
+            if route.provider == Provider.OPENAI:
+                yield f"data: {json.dumps({'type': 'provider', 'provider': 'openai', 'model': route.model})}\n\n"
+                agent = get_agent(provider="openai", model=route.model)
+                result = await agent.run(
+                    prompt=prompt_text,
+                    system_prompt=get_system_prompt(),
+                    tools=AGENT_TOOLS,
+                    cwd=str(PROACTIVE_DIR),
+                    max_turns=30,
+                )
+                full_response.append(result)
+                yield f"data: {json.dumps({'type': 'text', 'content': result})}\n\n"
+            else:
+                yield f"data: {json.dumps({'type': 'provider', 'provider': 'claude', 'model': route.model})}\n\n"
+                options = build_agent_options(max_turns=30)
+
+                async for msg in query(prompt=prompt_text, options=options):
+                    if isinstance(msg, AssistantMessage):
+                        for block in msg.content:
+                            if isinstance(block, TextBlock):
+                                full_response.append(block.text)
+                                yield f"data: {json.dumps({'type': 'text', 'content': block.text})}\n\n"
+                            elif isinstance(block, ToolUseBlock):
+                                yield f"data: {json.dumps({'type': 'tool', 'name': block.name})}\n\n"
+
+            memory.log_conversation(
+                role="user",
+                content=f"[File: {file.filename}] {message}"[:2000],
+                session_id="shared_chat",
+            )
+            memory.log_conversation(
+                role="assistant",
+                content="".join(full_response)[:2000],
+                session_id="shared_chat",
+            )
+
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
 
 
