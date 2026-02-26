@@ -80,14 +80,25 @@ def daemon():
 @main.command()
 @click.option("--production/--dev", default=True,
               help="Serve React build (production) or proxy to Vite (dev).")
-def web(production):
+@click.option("--no-open", is_flag=True, default=False,
+              help="Don't open browser automatically.")
+def web(production, no_open):
     """Start the web UI + API server (:8000)."""
     from agelclaw.api_server import app, API_PORT
+    import threading
+    import webbrowser
     import uvicorn
 
     sys.argv = ["agelclaw-web"]
     if production:
         sys.argv.append("--production")
+
+    if not no_open:
+        def _open_browser():
+            import time
+            time.sleep(1.5)  # Wait for uvicorn to start
+            webbrowser.open(f"http://localhost:{API_PORT}")
+        threading.Thread(target=_open_browser, daemon=True).start()
 
     uvicorn.run(app, host="0.0.0.0", port=API_PORT)
 
