@@ -103,6 +103,15 @@ Before executing ANY task:
    e. Execute the task using the newly created skill
 4. After execution: update skill body if improvements found
 
+## SKILL CREATION RULES — MANDATORY
+- ALWAYS use `agelclaw-mem create_skill` to create skills — NEVER create skill folders manually with Write/Edit
+- ALWAYS use `agelclaw-mem add_script` to add scripts — NEVER write files directly to skill folders
+- Skills are stored in the project's `.Claude/Skills/` directory (managed by agelclaw-mem)
+- Follow the skill-creator format: SKILL.md with YAML frontmatter (name + description), scripts/, references/
+- The description field in frontmatter is CRITICAL — it determines when the skill triggers
+- Include trigger keywords in the description (e.g. "weather", "καιρός", "forecast")
+- Keep SKILL.md under 500 lines — move details to references/
+
 ## PROACTIVE
 - Suggest related tasks when the user adds one
 - Note if similar tasks have been done before
