@@ -157,8 +157,36 @@ USING THE PROFILE:
 """
 
 
+def _build_prompt_with_history(user_input: str) -> str:
+    """Build prompt with recent conversation history for context."""
+    recent = memory.get_conversation_history(limit=10)
+    if not recent:
+        return user_input
+
+    history_lines = []
+    for msg in recent:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        # Truncate long messages
+        if len(content) > 500:
+            content = content[:500] + "..."
+        if role == "user":
+            history_lines.append(f"User: {content}")
+        else:
+            history_lines.append(f"Assistant: {content}")
+
+    history_text = "\n".join(history_lines)
+    return f"""<conversation_history>
+{history_text}
+</conversation_history>
+
+User's current message: {user_input}"""
+
+
 async def run_query(user_input: str) -> str:
     """Send a single query and collect the response."""
+    prompt_with_history = _build_prompt_with_history(user_input)
+
     options = ClaudeAgentOptions(
         system_prompt=SYSTEM_PROMPT,
         allowed_tools=["Skill", "Read", "Write", "Edit", "Bash", "Glob", "Grep"],
@@ -172,7 +200,7 @@ async def run_query(user_input: str) -> str:
     tool_count = 0
     has_printed_text = False
 
-    async for message in query(prompt=user_input, options=options):
+    async for message in query(prompt=prompt_with_history, options=options):
         if isinstance(message, AssistantMessage):
             for block in message.content:
                 if isinstance(block, TextBlock):
