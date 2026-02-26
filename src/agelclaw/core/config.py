@@ -12,11 +12,12 @@ from typing import Any
 import yaml
 from dotenv import load_dotenv
 
-_PROACTIVE_DIR = Path(__file__).resolve().parent.parent
-CONFIG_PATH = _PROACTIVE_DIR / "config.yaml"
+from agelclaw.project import get_project_dir, get_config_path, get_env_path
+
+CONFIG_PATH = get_config_path()
 
 # Load .env so API keys are available via os.getenv
-load_dotenv(_PROACTIVE_DIR / ".env")
+load_dotenv(get_env_path())
 
 _config_cache: dict | None = None
 
@@ -104,7 +105,7 @@ def save_env_file(config: dict[str, Any]) -> None:
         val = config.get(yaml_key, "")
         if val:
             env_lines.append(f"{env_var}={val}")
-    env_path = _PROACTIVE_DIR / ".env"
+    env_path = get_env_path()
     env_path.write_text("\n".join(env_lines) + "\n", encoding="utf-8")
 
 

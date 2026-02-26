@@ -29,3 +29,22 @@ Thumbs.db
 digest_*.html
 linkedin_article*.md
 sacred-texts*.md
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+src/agelclaw/__pycache__/
+
+# Subagents (user data)
+subagents/
+
+# Buypage
+buypage/node_modules/
+buypage/dist/
+
+# IDE
+.vscode/
+
+# Ephemeral astronomy data
+de421.bsp

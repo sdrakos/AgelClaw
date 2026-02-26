@@ -10,7 +10,7 @@ Routes tasks to Claude or OpenAI based on:
 from enum import Enum
 from dataclasses import dataclass
 
-from core.config import load_config
+from agelclaw.core.config import load_config
 
 
 class Provider(str, Enum):

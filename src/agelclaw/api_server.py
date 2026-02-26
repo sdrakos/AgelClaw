@@ -33,17 +33,18 @@ from claude_agent_sdk import (
     TextBlock,
     ToolUseBlock,
 )
-from agent_config import (
+from agelclaw.agent_config import (
     get_system_prompt, build_agent_options, build_prompt_with_history,
     PROACTIVE_DIR, SHARED_SESSION_ID, get_agent, get_router,
     AGENT_TOOLS, ALLOWED_TOOLS,
 )
-from core.config import load_config, save_config, save_env_file
-from core.agent_router import Provider
-from memory import Memory
+from agelclaw.core.config import load_config, save_config, save_env_file
+from agelclaw.core.agent_router import Provider
+from agelclaw.memory import Memory
 
 # ── Config ───────────────────────────────────────────────────────────
-REACT_BUILD_DIR = PROACTIVE_DIR / "react-claude-chat" / "dist"
+from agelclaw.project import get_react_dist_dir
+REACT_BUILD_DIR = get_react_dist_dir()
 _cfg = load_config()
 API_PORT = _cfg.get("api_port", 8000)
 DAEMON_PORT = _cfg.get("daemon_port", 8420)
@@ -245,7 +246,7 @@ async def control_service(service: str, action: str):
 @app.get("/api/skills")
 async def skills():
     """Dynamically scan .Claude/Skills/ and return installed skills."""
-    skills_dir = PROACTIVE_DIR.parent / ".Claude" / "Skills"
+    skills_dir = get_skills_dir()
     result = []
     if skills_dir.exists():
         for entry in sorted(skills_dir.iterdir()):
@@ -361,7 +362,7 @@ async def chat(req: ChatRequest):
 
 
 # ── Subagent Endpoints ───────────────────────────────────────────────
-from core.subagent_manager import SubagentManager
+from agelclaw.core.subagent_manager import SubagentManager
 
 _subagent_mgr = SubagentManager()
 

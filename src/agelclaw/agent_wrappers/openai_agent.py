@@ -7,8 +7,8 @@ Wraps the OpenAI Agents SDK for use through the agent router.
 from typing import AsyncGenerator
 
 from agents import Agent, Runner  # openai-agents SDK
-from agent_wrappers.openai_tools import ALL_OPENAI_TOOLS, set_cwd
-from agent_wrappers.base_agent import BaseAgent
+from agelclaw.agent_wrappers.openai_tools import ALL_OPENAI_TOOLS, set_cwd
+from agelclaw.agent_wrappers.base_agent import BaseAgent
 
 
 class OpenAIAgent(BaseAgent):
@@ -65,7 +65,7 @@ class OpenAIAgent(BaseAgent):
         if not tool_names:
             return ALL_OPENAI_TOOLS
 
-        from agent_wrappers.openai_tools import (
+        from agelclaw.agent_wrappers.openai_tools import (
             bash, read_file, write_file, grep_search, glob_search,
             web_fetch, web_search
         )

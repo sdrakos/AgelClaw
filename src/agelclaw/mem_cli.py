@@ -5,7 +5,7 @@ Exposes memory and skill operations as CLI commands so the daemon agent
 can call them via Bash (non-streaming mode doesn't support MCP servers).
 
 Usage:
-  python mem_cli.py <command> [args...]
+  agelclaw-mem <command> [args...]
 
 Memory commands:
   context                           - Get full context summary
@@ -74,10 +74,8 @@ from urllib.error import URLError
 # Fix Windows console encoding
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
-# Ensure proactive dir is in path
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from memory import Memory
+from agelclaw.memory import Memory
+from agelclaw.project import get_tasks_dir, get_subagents_dir
 
 memory = Memory()
 
@@ -162,7 +160,7 @@ def main():
         if task:
             print(json.dumps(task, indent=2, default=str))
             # Also show task folder contents if exists
-            folder = Path(__file__).resolve().parent / "tasks" / f"task_{task_id}"
+            folder = get_tasks_dir() / f"task_{task_id}"
             if folder.exists():
                 files = [f.name for f in folder.iterdir() if f.is_file()]
                 print(f"\nTask folder: {folder}")
@@ -339,21 +337,21 @@ def main():
     # Skill tools are SdkMcpTool objects — call .handler() for the async fn
 
     elif cmd == "skills":
-        from skill_tools import list_installed_skills
+        from agelclaw.skill_tools import list_installed_skills
         import asyncio
         result = asyncio.run(list_installed_skills.handler({}))
         print(result["content"][0]["text"])
 
     elif cmd == "find_skill":
         desc = " ".join(sys.argv[2:])
-        from skill_tools import find_skill_for_task
+        from agelclaw.skill_tools import find_skill_for_task
         import asyncio
         result = asyncio.run(find_skill_for_task.handler({"task_description": desc}))
         print(result["content"][0]["text"])
 
     elif cmd == "skill_content":
         name = sys.argv[2]
-        from skill_tools import get_skill_content
+        from agelclaw.skill_tools import get_skill_content
         import asyncio
         result = asyncio.run(get_skill_content.handler({"skill_name": name}))
         print(result["content"][0]["text"])
@@ -363,7 +361,7 @@ def main():
         desc = sys.argv[3]
         body = sys.argv[4]
         loc = sys.argv[5] if len(sys.argv) > 5 else "project"
-        from skill_tools import create_full_skill
+        from agelclaw.skill_tools import create_full_skill
         import asyncio
         result = asyncio.run(create_full_skill.handler({
             "name": name, "description": desc, "body": body, "location": loc
@@ -374,7 +372,7 @@ def main():
         skill = sys.argv[2]
         filename = sys.argv[3]
         content = sys.argv[4]
-        from skill_tools import add_skill_script
+        from agelclaw.skill_tools import add_skill_script
         import asyncio
         result = asyncio.run(add_skill_script.handler({
             "skill_name": skill, "filename": filename, "content": content
@@ -385,7 +383,7 @@ def main():
         skill = sys.argv[2]
         filename = sys.argv[3]
         content = sys.argv[4]
-        from skill_tools import add_skill_reference
+        from agelclaw.skill_tools import add_skill_reference
         import asyncio
         result = asyncio.run(add_skill_reference.handler({
             "skill_name": skill, "filename": filename, "content": content
@@ -395,7 +393,7 @@ def main():
     elif cmd == "update_skill":
         name = sys.argv[2]
         body = sys.argv[3]
-        from skill_tools import update_skill_body
+        from agelclaw.skill_tools import update_skill_body
         import asyncio
         result = asyncio.run(update_skill_body.handler({
             "skill_name": name, "new_body": body
@@ -461,7 +459,7 @@ def main():
     # ── Subagent commands ────────────────────────────────────
 
     elif cmd == "subagents":
-        subagents_root = Path(__file__).resolve().parent / "subagents"
+        subagents_root = get_subagents_dir()
         if not subagents_root.exists():
             print("No subagent definitions found.")
         else:
@@ -496,7 +494,7 @@ def main():
 
     elif cmd == "subagent_content":
         name = sys.argv[2]
-        subagents_root = Path(__file__).resolve().parent / "subagents"
+        subagents_root = get_subagents_dir()
         sub_md = subagents_root / name / "SUBAGENT.md"
         if sub_md.exists():
             print(sub_md.read_text(encoding="utf-8", errors="replace"))
@@ -507,7 +505,7 @@ def main():
         name = sys.argv[2]
         desc = sys.argv[3]
         body = sys.argv[4]
-        subagents_root = Path(__file__).resolve().parent / "subagents"
+        subagents_root = get_subagents_dir()
         sub_dir = subagents_root / name
         sub_dir.mkdir(parents=True, exist_ok=True)
         (sub_dir / "scripts").mkdir(exist_ok=True)
@@ -522,7 +520,7 @@ def main():
     elif cmd == "search":
         query_text = sys.argv[2] if len(sys.argv) > 2 else ""
         if not query_text:
-            print("Usage: python mem_cli.py search \"<query>\" [limit] [--table <name>]")
+            print("Usage: agelclaw-mem search \"<query>\" [limit] [--table <name>]")
             sys.exit(1)
 
         limit = 5
@@ -590,7 +588,7 @@ def main():
 
     else:
         print(f"Unknown command: {cmd}")
-        print("Run 'python mem_cli.py' for help")
+        print("Run 'agelclaw-mem' for help")
         sys.exit(1)
 
 

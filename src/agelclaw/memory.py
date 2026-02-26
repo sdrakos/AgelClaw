@@ -21,11 +21,14 @@ from contextlib import contextmanager
 
 log = logging.getLogger("memory")
 
-DB_PATH = Path(__file__).parent / "data" / "agent_memory.db"
+from agelclaw.project import get_db_path
+DB_PATH = get_db_path()
 
 
 class Memory:
-    def __init__(self, db_path: Path = DB_PATH):
+    def __init__(self, db_path: Path = None):
+        if db_path is None:
+            db_path = get_db_path()
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
@@ -171,11 +174,11 @@ class Memory:
         """Lazy-init EmbeddingStore. Returns None if unavailable."""
         if self._embedding_store is None:
             try:
-                from core.config import load_config
+                from agelclaw.core.config import load_config
                 cfg = load_config()
                 api_key = cfg.get("openai_api_key", "")
                 if api_key:
-                    from embeddings import EmbeddingStore
+                    from agelclaw.embeddings import EmbeddingStore
                     self._embedding_store = EmbeddingStore(self.db_path, api_key)
                     if not self._embedding_store.available:
                         self._embedding_store = False  # sentinel: tried, failed
@@ -783,7 +786,8 @@ class Memory:
                            f"[priority:{t['priority']}]{dep_str}{assign_str}")
 
         # Per-subagent task counts
-        subagents_root = Path(__file__).parent / "subagents"
+        from agelclaw.project import get_subagents_dir
+        subagents_root = get_subagents_dir()
         if subagents_root.exists():
             sa_lines = []
             for sub_dir in sorted(subagents_root.iterdir()):
@@ -839,11 +843,12 @@ class Memory:
     def get_task_folder(self, task_id: int) -> Path:
         """Get (and create if needed) the filesystem folder for a task.
         Subagent tasks go to subagents/<name>/tasks/task_<id>/."""
+        from agelclaw.project import get_subagents_dir, get_tasks_dir
         task = self.get_task(task_id)
         if task and task.get("assigned_to"):
-            folder = Path(__file__).parent / "subagents" / task["assigned_to"] / "tasks" / f"task_{task_id}"
+            folder = get_subagents_dir() / task["assigned_to"] / "tasks" / f"task_{task_id}"
         else:
-            folder = Path(__file__).parent / "tasks" / f"task_{task_id}"
+            folder = get_tasks_dir() / f"task_{task_id}"
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 

@@ -38,16 +38,17 @@ from claude_agent_sdk import (
     TextBlock,
     ToolUseBlock,
 )
-from agent_config import (
+from agelclaw.agent_config import (
     get_system_prompt, build_agent_options, build_prompt_with_history,
     SHARED_SESSION_ID, get_agent, get_router, AGENT_TOOLS, PROACTIVE_DIR,
 )
-from core.config import load_config
-from core.agent_router import Provider
-from memory import Memory
+from agelclaw.core.config import load_config
+from agelclaw.core.agent_router import Provider
+from agelclaw.memory import Memory
 
 # ── Setup ────────────────────────────────────────────────────────────
-load_dotenv(Path(__file__).parent / ".env")
+from agelclaw.project import get_env_path
+load_dotenv(get_env_path())
 
 logging.basicConfig(
     format="%(asctime)s [telegram-bot] %(levelname)s: %(message)s",

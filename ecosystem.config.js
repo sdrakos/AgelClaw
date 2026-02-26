@@ -14,11 +14,13 @@
 //   email-digest            — Daily Outlook email digest at 08:00
 
 const path = require("path");
+const os = require("os");
 
-// Use virtual environment Python (created by launcher.py)
+// Use system Python (not virtualenv - see CLAUDE.md)
+// Full path for Windows to avoid PM2 PATH issues
 const pythonPath = process.platform === "win32"
-  ? path.join(__dirname, ".venv", "Scripts", "python.exe")
-  : path.join(__dirname, ".venv", "bin", "python3");
+  ? "C:\\Users\\Στέφανος\\AppData\\Local\\Programs\\Python\\Python313\\python.exe"
+  : "python3";
 
 module.exports = {
   apps: [
@@ -36,6 +38,7 @@ module.exports = {
         AGENT_CHECK_INTERVAL: "300",    // 5 min between cycles
         AGENT_MAX_TASKS: "3",
         AGENT_API_PORT: "8420",
+        CLAUDE_CODE_MAX_OUTPUT_TOKENS: "0",  // No output limit
       },
       env_development: {
         AGENT_CHECK_INTERVAL: "60",     // 1 min (dev)

@@ -12,12 +12,14 @@ from pathlib import Path
 
 from claude_agent_sdk import ClaudeAgentOptions
 
-from core.config import load_config
-from core.agent_router import AgentRouter, Provider
+from agelclaw.core.config import load_config
+from agelclaw.core.agent_router import AgentRouter, Provider
 
-PROACTIVE_DIR = Path(__file__).resolve().parent
+from agelclaw.project import get_project_dir, get_db_path, get_skills_dir, get_subagents_dir
+
+PROACTIVE_DIR = get_project_dir()
 SHARED_SESSION_ID = "shared_chat"
-DB_PATH = PROACTIVE_DIR / "data" / "agent_memory.db"
+DB_PATH = get_db_path()
 
 # All agent channels (chat, telegram, daemon) share the same full tool set
 AGENT_TOOLS = ["Skill", "Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebFetch", "WebSearch"]
@@ -36,27 +38,27 @@ You have: Read, Write, Edit, Bash, Glob, Grep, WebSearch, WebFetch, Skill.
 Use them directly. Do NOT tell the user to run commands — run them yourself.
 
 ## MEMORY & SKILL CLI
-Use `python mem_cli.py <command>` via Bash for ALL memory and skill operations:
+Use `agelclaw-mem <command>` via Bash for ALL memory and skill operations:
 
 ### Memory commands:
-  python mem_cli.py context                          # Full context summary
-  python mem_cli.py pending [limit]                  # Pending tasks (ready now)
-  python mem_cli.py due                              # Due scheduled tasks
-  python mem_cli.py scheduled                        # Future scheduled tasks
-  python mem_cli.py completed                        # Recently completed tasks
-  python mem_cli.py all_tasks [limit]                # All recent tasks (any status)
-  python mem_cli.py get_task <id>                    # Full task details + result + files
-  python mem_cli.py stats                            # Task statistics
-  python mem_cli.py start_task <id>                  # Mark task in_progress
-  python mem_cli.py complete_task <id> "<result>"    # Mark task completed
-  python mem_cli.py fail_task <id> "<error>"         # Mark task failed
-  python mem_cli.py add_task "<title>" "<desc>" [pri] [due_at] [recurring]
-  python mem_cli.py log "<message>"                  # Log a message
-  python mem_cli.py add_learning "<cat>" "<content>" # Add a learning
-  python mem_cli.py get_learnings [category]         # Get learnings
-  python mem_cli.py rules                            # List active hard rules
-  python mem_cli.py promote_rule <id>                # Promote learning → hard rule
-  python mem_cli.py demote_rule <id>                 # Demote rule → regular learning
+  agelclaw-mem context                          # Full context summary
+  agelclaw-mem pending [limit]                  # Pending tasks (ready now)
+  agelclaw-mem due                              # Due scheduled tasks
+  agelclaw-mem scheduled                        # Future scheduled tasks
+  agelclaw-mem completed                        # Recently completed tasks
+  agelclaw-mem all_tasks [limit]                # All recent tasks (any status)
+  agelclaw-mem get_task <id>                    # Full task details + result + files
+  agelclaw-mem stats                            # Task statistics
+  agelclaw-mem start_task <id>                  # Mark task in_progress
+  agelclaw-mem complete_task <id> "<result>"    # Mark task completed
+  agelclaw-mem fail_task <id> "<error>"         # Mark task failed
+  agelclaw-mem add_task "<title>" "<desc>" [pri] [due_at] [recurring]
+  agelclaw-mem log "<message>"                  # Log a message
+  agelclaw-mem add_learning "<cat>" "<content>" # Add a learning
+  agelclaw-mem get_learnings [category]         # Get learnings
+  agelclaw-mem rules                            # List active hard rules
+  agelclaw-mem promote_rule <id>                # Promote learning → hard rule
+  agelclaw-mem demote_rule <id>                 # Demote rule → regular learning
 
 ### Scheduling:
   due_at format: ISO datetime, e.g. "2026-02-16T09:00:00"
@@ -68,45 +70,45 @@ Use `python mem_cli.py <command>` via Bash for ALL memory and skill operations:
   Priority: 1=critical, 3=high, 5=normal, 7=low
 
 ### Skill commands:
-  python mem_cli.py skills                           # List installed skills
-  python mem_cli.py find_skill "<description>"       # Find matching skill
-  python mem_cli.py skill_content <name>             # Get skill content
-  python mem_cli.py create_skill <name> "<desc>" "<body>" [location]
-  python mem_cli.py add_script <skill> <file> "<code>"
-  python mem_cli.py add_ref <skill> <file> "<content>"
-  python mem_cli.py update_skill <name> "<body>"
+  agelclaw-mem skills                           # List installed skills
+  agelclaw-mem find_skill "<description>"       # Find matching skill
+  agelclaw-mem skill_content <name>             # Get skill content
+  agelclaw-mem create_skill <name> "<desc>" "<body>" [location]
+  agelclaw-mem add_script <skill> <file> "<code>"
+  agelclaw-mem add_ref <skill> <file> "<content>"
+  agelclaw-mem update_skill <name> "<body>"
 
 ### Per-subagent task commands:
-  python mem_cli.py add_subagent_task <subagent> "<title>" "<desc>" [pri] [due_at] [recurring]
-  python mem_cli.py assign_task <task_id> <subagent_name>
-  python mem_cli.py unassign_task <task_id>
-  python mem_cli.py subagent_tasks <subagent_name> [status] [limit]
-  python mem_cli.py subagent_stats <subagent_name>
+  agelclaw-mem add_subagent_task <subagent> "<title>" "<desc>" [pri] [due_at] [recurring]
+  agelclaw-mem assign_task <task_id> <subagent_name>
+  agelclaw-mem unassign_task <task_id>
+  agelclaw-mem subagent_tasks <subagent_name> [status] [limit]
+  agelclaw-mem subagent_stats <subagent_name>
 
   Tasks assigned to subagents execute with the subagent's specialized prompt and tools.
   Unassigned tasks are executed by the global daemon.
 
 ### Subagent definition commands:
-  python mem_cli.py subagents                        # List installed subagent definitions
-  python mem_cli.py subagent_content <name>          # Get full SUBAGENT.md content
-  python mem_cli.py create_subagent <name> "<desc>" "<body>"
+  agelclaw-mem subagents                        # List installed subagent definitions
+  agelclaw-mem subagent_content <name>          # Get full SUBAGENT.md content
+  agelclaw-mem create_subagent <name> "<desc>" "<body>"
 
 ### Task folder commands:
-  python mem_cli.py task_folder <id>                 # Get/create task folder path
+  agelclaw-mem task_folder <id>                 # Get/create task folder path
   Task output files are in: `tasks/task_<id>/result.md` and `tasks/task_<id>/`
 
 ### Semantic search (AI-powered):
-  python mem_cli.py search "<query>" [limit]                    # Search across all tables
-  python mem_cli.py search "<query>" --table conversations      # Search specific table
-  python mem_cli.py search "<query>" --table tasks              # Search tasks only
+  agelclaw-mem search "<query>" [limit]                    # Search across all tables
+  agelclaw-mem search "<query>" --table conversations      # Search specific table
+  agelclaw-mem search "<query>" --table tasks              # Search tasks only
 
 ### Profile CLI:
-  python mem_cli.py profile [category]                         # View profile
-  python mem_cli.py set_profile <cat> <key> "<value>" [conf] [source]
-  python mem_cli.py del_profile <cat> <key>
+  agelclaw-mem profile [category]                         # View profile
+  agelclaw-mem set_profile <cat> <key> "<value>" [conf] [source]
+  agelclaw-mem del_profile <cat> <key>
 
 ## TASK MANAGEMENT
-- Create tasks for background/scheduled work: `python mem_cli.py add_task "<title>" "<desc>" [pri] [due_at] [recurring]`
+- Create tasks for background/scheduled work: `agelclaw-mem add_task "<title>" "<desc>" [pri] [due_at] [recurring]`
 - The daemon executes background tasks autonomously — you handle interactive requests directly.
 - After creating a task, ALWAYS tell the user "Task #N created".
 - To wake the daemon immediately: `curl -s -X POST http://localhost:8420/wake`
@@ -116,13 +118,13 @@ When the user asks to "create a subagent", "δημιούργησε subagent", "�
 
 1. **Create the subagent definition** (SUBAGENT.md with specialized prompt):
    ```
-   python mem_cli.py create_subagent <name> "<description>" "<detailed specialist prompt>"
+   agelclaw-mem create_subagent <name> "<description>" "<detailed specialist prompt>"
    ```
    The body MUST be a complete specialist prompt — NOT a placeholder. Write it as if instructing an expert.
 
 2. **Create the task ASSIGNED to the subagent** (NOT a global task):
    ```
-   python mem_cli.py add_subagent_task <name> "<title>" "<detailed description>" [priority]
+   agelclaw-mem add_subagent_task <name> "<title>" "<detailed description>" [priority]
    ```
    This creates a task with `assigned_to=<name>`, so the daemon routes it to the subagent.
 
@@ -145,21 +147,21 @@ ALWAYS use `add_subagent_task`, NEVER plain `add_task` for subagent work.
 ## FINDING TASK RESULTS (MANDATORY)
 When user asks "where is it?", "did it finish?", "show me the result", "πού είναι;", "τελείωσε;":
 → You MUST run bash commands to check. NEVER answer from memory alone.
-→ Step 1: `python mem_cli.py completed` (recent completed tasks)
-→ Step 2: `python mem_cli.py get_task <id>` (full details + file paths)
+→ Step 1: `agelclaw-mem completed` (recent completed tasks)
+→ Step 2: `agelclaw-mem get_task <id>` (full details + file paths)
 → Step 3: If task has files, tell user the exact path
 NEVER say "not found" without checking first.
 
 ## CONVERSATION MEMORY
 - Your prompt ALREADY contains recent conversation history (provided automatically)
 - READ THE PROMPT CONTEXT FIRST before running mem_cli.py context
-- Use `python mem_cli.py conversations "<keyword>"` to search older conversations by keyword
+- Use `agelclaw-mem conversations "<keyword>"` to search older conversations by keyword
 - Conversations are SHARED between Web Chat and Telegram
 
 ## PERSONALIZATION — YOU ARE A PERSONAL ASSISTANT
 The context includes the user's profile. Use it to personalize every interaction.
 After learning new facts about the user, save them:
-  python mem_cli.py set_profile <category> <key> "<value>" [confidence] [source]
+  agelclaw-mem set_profile <category> <key> "<value>" [confidence] [source]
 
 Categories: identity, work, preferences, relationships, habits, interests
 - Stated facts → confidence 0.9, source "stated"
@@ -168,7 +170,7 @@ Categories: identity, work, preferences, relationships, habits, interests
 
 ## RESPONSE SPEED RULES (CRITICAL)
 - For SIMPLE messages (greetings, questions, opinions, chat): respond IMMEDIATELY. Do NOT call any tools first.
-- Do NOT run `python mem_cli.py context` or `python mem_cli.py pending` before answering unless the user specifically asks about tasks/memory.
+- Do NOT run `agelclaw-mem context` or `agelclaw-mem pending` before answering unless the user specifically asks about tasks/memory.
 - Your prompt ALREADY contains conversation history and context. USE IT directly.
 - Only call mem_cli.py when you need to CREATE/UPDATE/SEARCH something, not to READ context you already have.
 - If the user asks "τι tasks έχω;" THEN check tasks. If the user says "γεια σου" just respond.
@@ -177,7 +179,7 @@ Categories: identity, work, preferences, relationships, habits, interests
 - Respond in the same language the user uses
 - Be concise and helpful
 - NEVER say "you can run this command" — RUN IT YOURSELF or delegate to daemon
-- You MUST use the bash tool to run `python mem_cli.py` commands when you need to CREATE/UPDATE data — DO NOT guess or assume
+- You MUST use the bash tool to run `agelclaw-mem` commands when you need to CREATE/UPDATE data — DO NOT guess or assume
 - NEVER claim something doesn't exist without checking first via bash
 """
 
@@ -186,16 +188,16 @@ def _scan_installed_subagents() -> str:
     """Scan proactive/subagents/ directory and build compact subagent catalog.
 
     Each subagent has a SUBAGENT.md with YAML frontmatter (name, description, provider, task_type).
-    Full content is NOT included — agent should run `python mem_cli.py subagent_content <name>`.
+    Full content is NOT included — agent should run `agelclaw-mem subagent_content <name>`.
     """
     import re as _re
 
-    subagents_root = PROACTIVE_DIR / "subagents"
+    subagents_root = get_subagents_dir()
     if not subagents_root.exists():
         return ""
 
     # Get memory instance for task counts
-    from memory import Memory as _Memory
+    from agelclaw.memory import Memory as _Memory
     _mem = _Memory()
 
     entries = []
@@ -268,8 +270,8 @@ def _scan_installed_subagents() -> str:
         return ""
 
     header = "\n\n## INSTALLED SUBAGENTS\n"
-    header += "Persistent subagent definitions. Run `python mem_cli.py subagent_content <name>` for full prompt template.\n"
-    header += "Create new: `python mem_cli.py create_subagent <name> \"<desc>\" \"<body>\"`\n\n"
+    header += "Persistent subagent definitions. Run `agelclaw-mem subagent_content <name>` for full prompt template.\n"
+    header += "Create new: `agelclaw-mem create_subagent <name> \"<desc>\" \"<body>\"`\n\n"
     return header + "\n".join(entries)
 
 
@@ -278,12 +280,12 @@ def _scan_installed_skills() -> str:
 
     Only includes: name, description (from YAML frontmatter), script names, and path.
     Full SKILL.md content is NOT included to keep the prompt small.
-    The agent should run `python mem_cli.py skill_content <name>` to get full details.
+    The agent should run `agelclaw-mem skill_content <name>` to get full details.
     """
     import re as _re
 
     skill_dirs = [
-        PROACTIVE_DIR.parent / ".Claude" / "Skills",   # project skills
+        get_skills_dir(),   # project skills
         Path.home() / ".claude" / "skills",             # user skills
     ]
     skills_text = []
@@ -349,7 +351,7 @@ def _scan_installed_skills() -> str:
         return ""
 
     header = "\n\n## INSTALLED SKILLS\n"
-    header += "Use these directly via Bash. Run `python mem_cli.py skill_content <name>` for full usage details.\n"
+    header += "Use these directly via Bash. Run `agelclaw-mem skill_content <name>` for full usage details.\n"
     header += "Credentials are in config.yaml — NEVER ask the user for them.\n\n"
     return header + "\n".join(skills_text)
 
@@ -366,7 +368,7 @@ def get_system_prompt() -> str:
     if _prompt_cache["text"] and (now - _prompt_cache["ts"]) < _PROMPT_CACHE_TTL:
         return _prompt_cache["text"]
 
-    from memory import Memory
+    from agelclaw.memory import Memory
     mem = Memory()
     result = _SYSTEM_PROMPT_BASE + _scan_installed_skills() + _scan_installed_subagents() + mem.build_rules_prompt()
     _prompt_cache["text"] = result
@@ -422,7 +424,7 @@ def build_prompt_with_history(user_text: str, memory) -> str:
         + "\n\n".join(context_parts)
         + "\n\nRespond to the latest user message. You have full context of what was discussed before."
         + "\n\nREMINDER: You have ALL tools available (Read, Write, Edit, Bash, Grep, Glob, WebSearch, WebFetch). "
-        + "Use `python mem_cli.py` via Bash for memory/skill/task operations. "
+        + "Use `agelclaw-mem` via Bash for memory/skill/task operations. "
         + "Execute work directly — don't just delegate unless it's a background/scheduled task."
     )
 
@@ -436,7 +438,7 @@ def _find_relevant_history(user_text: str, session_id: str, recent_msgs: list) -
 
     # Try semantic search first
     try:
-        from memory import Memory
+        from agelclaw.memory import Memory
         mem = Memory()
         semantic_results = mem.semantic_search(user_text, tables=["conversations"], limit=10)
         if semantic_results:
@@ -520,9 +522,9 @@ def get_agent(provider: str | Provider | None = None, model: str | None = None):
     Returns:
         BaseAgent instance (ClaudeAgent or OpenAIAgent).
     """
-    from agent_wrappers.base_agent import BaseAgent
-    from agent_wrappers.claude_agent import ClaudeAgent
-    from agent_wrappers.openai_agent import OpenAIAgent
+    from agelclaw.agent_wrappers.base_agent import BaseAgent
+    from agelclaw.agent_wrappers.claude_agent import ClaudeAgent
+    from agelclaw.agent_wrappers.openai_agent import OpenAIAgent
 
     route = _router.route(prefer=provider)
 

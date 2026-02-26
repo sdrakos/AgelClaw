@@ -42,17 +42,17 @@ from claude_agent_sdk import (
     create_sdk_mcp_server,
 )
 
-from memory import Memory
-from memory_tools import ALL_MEMORY_TOOLS
-from skill_tools import ALL_SKILL_TOOLS
+from agelclaw.memory import Memory
+from agelclaw.memory_tools import ALL_MEMORY_TOOLS
+from agelclaw.skill_tools import ALL_SKILL_TOOLS
 
 # ─────────────────────────────────────────────────────────
 # Config
 # ─────────────────────────────────────────────────────────
 
-from core.config import load_config
-from core.agent_router import AgentRouter, Provider
-from agent_config import get_agent, get_system_prompt, AGENT_TOOLS, ALLOWED_TOOLS
+from agelclaw.core.config import load_config
+from agelclaw.core.agent_router import AgentRouter, Provider
+from agelclaw.agent_config import get_agent, get_system_prompt, AGENT_TOOLS, ALLOWED_TOOLS
 
 _cfg = load_config()
 CHECK_INTERVAL = _cfg.get("check_interval", 300)
@@ -62,8 +62,8 @@ API_PORT = _cfg.get("daemon_port", 8420)
 WEBHOOK_URL = os.getenv("AGENT_WEBHOOK_URL", "")  # POST cycle summaries here
 
 _router = AgentRouter()
-LOG_DIR = Path(__file__).parent / "logs"
-LOG_DIR.mkdir(exist_ok=True)
+from agelclaw.project import get_project_dir, get_log_dir, get_skills_dir
+LOG_DIR = get_log_dir()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -108,7 +108,7 @@ skill_server = create_sdk_mcp_server(name="skill-manager", version="1.0.0", tool
 def send_telegram_notification(task_id: int, task_title: str, status: str, result: str, duration: float = None):
     """Send Telegram notification when a task completes/fails."""
     try:
-        from core.config import load_config as _load_cfg
+        from agelclaw.core.config import load_config as _load_cfg
         cfg = _load_cfg(force_reload=True)
         bot_token = cfg.get("telegram_bot_token", "") or os.getenv("TELEGRAM_BOT_TOKEN", "")
         allowed_users = cfg.get("telegram_allowed_users", "") or os.getenv("TELEGRAM_ALLOWED_USERS", "")
@@ -175,7 +175,7 @@ def send_task_notification(task_id: int, task_title: str, status: str, result: s
         script_path = Path.home() / ".claude" / "skills" / "task-completion-notifier" / "scripts" / "task_notifier.py"
         if not script_path.exists():
             # Try project skills
-            script_path = Path(__file__).parent.parent / ".Claude" / "Skills" / "task-completion-notifier" / "scripts" / "task_notifier.py"
+            script_path = get_skills_dir() / "task-completion-notifier" / "scripts" / "task_notifier.py"
 
         if not script_path.exists():
             log.warning(f"Notification script not found at {script_path}")
@@ -218,7 +218,7 @@ You are running as the background daemon. You execute tasks from persistent memo
 
 ## LANGUAGE
 ALWAYS write task results (complete_task) in GREEK. The user speaks Greek.
-Example: python mem_cli.py complete_task 25 "Δημιουργήθηκαν 4 εικόνες book cover και αποθηκεύτηκαν στο tasks/task_25/"
+Example: agelclaw-mem complete_task 25 "Δημιουργήθηκαν 4 εικόνες book cover και αποθηκεύτηκαν στο tasks/task_25/"
 NEVER write results in English.
 
 ## TASK FOLDERS
@@ -236,34 +236,34 @@ When creating Skills or Subagents, you MUST:
 VIOLATION: Creating a skill/subagent with just `import X` or a bare template is FORBIDDEN.
 
 ## STARTUP PROCEDURE (every cycle)
-1. Run: python mem_cli.py context
-2. Run: python mem_cli.py due
-3. Run: python mem_cli.py pending
+1. Run: agelclaw-mem context
+2. Run: agelclaw-mem due
+3. Run: agelclaw-mem pending
 4. Execute tasks in priority order
 
 ## SKILL-FIRST EXECUTION (MANDATORY for EVERY task)
 Before executing ANY task:
-1. Run: python mem_cli.py find_skill "<task description>"
-2. If skill found → run: python mem_cli.py skill_content <name> → follow instructions
+1. Run: agelclaw-mem find_skill "<task description>"
+2. If skill found → run: agelclaw-mem skill_content <name> → follow instructions
 3. If NO skill found:
    a. Read the skill-creator guide FIRST: cat .Claude/Skills/skill-creator/SKILL.md
    b. Research the topic using available tools (Bash, Read, Grep, WebSearch)
    c. Create skill following the skill-creator guide:
-      python mem_cli.py create_skill <name> "<desc>" "<body>"
-   d. Add scripts: python mem_cli.py add_script <name> <file> "<code>"
-   e. Add references if needed: python mem_cli.py add_ref <name> <file> "<content>"
+      agelclaw-mem create_skill <name> "<desc>" "<body>"
+   d. Add scripts: agelclaw-mem add_script <name> <file> "<code>"
+   e. Add references if needed: agelclaw-mem add_ref <name> <file> "<content>"
    f. Execute the task using the newly created skill
-4. After execution: python mem_cli.py update_skill <name> "<updated body>" if improvements found
+4. After execution: agelclaw-mem update_skill <name> "<updated body>" if improvements found
 
 ## TASK EXECUTION
 For each task:
-1. python mem_cli.py start_task <id>
+1. agelclaw-mem start_task <id>
 2. Follow SKILL-FIRST EXECUTION above (find or create skill)
 3. Execute the task using skill scripts and instructions
-4. python mem_cli.py complete_task <id> "<result summary>"
-5. If failed: python mem_cli.py fail_task <id> "<error>"
-6. python mem_cli.py log "<what you did>"
-7. python mem_cli.py add_learning "<category>" "<content>" when you learn something
+4. agelclaw-mem complete_task <id> "<result summary>"
+5. If failed: agelclaw-mem fail_task <id> "<error>"
+6. agelclaw-mem log "<what you did>"
+7. agelclaw-mem add_learning "<category>" "<content>" when you learn something
 
 ## SKILL CREATION RULES
 - Create skills proactively — every new domain should get a skill
@@ -276,11 +276,11 @@ For each task:
 
 ## TASK REPORTING
 After completing a task, ALWAYS:
-1. Write a detailed result via: python mem_cli.py complete_task <id> "<full result summary>"
+1. Write a detailed result via: agelclaw-mem complete_task <id> "<full result summary>"
 2. If the task requested a "report" or "summary", also save it as a file:
    - Write the report to: proactive/reports/report_<task_id>_<YYYYMMDD_HHMMSS>.md
    - Include: task title, what was done, results, any data/findings
-3. Log what you did: python mem_cli.py log "<summary>"
+3. Log what you did: agelclaw-mem log "<summary>"
 4. Add learnings if applicable
 
 ## AUTONOMY RULES
@@ -310,7 +310,7 @@ def _get_daemon_prompt() -> str:
 # Subagent Helpers
 # ─────────────────────────────────────────────────────────
 
-proactive_dir = Path(__file__).resolve().parent
+proactive_dir = get_project_dir()
 
 
 def _parse_subagent_md(name: str) -> dict:
@@ -422,7 +422,7 @@ async def execute_single_task(task: dict, cycle_session: str):
 
         # Build a focused prompt for this single task
         context = memory.build_context_summary()
-        proactive_dir = Path(__file__).resolve().parent
+        proactive_dir = get_project_dir()
         task_desc = task.get("description", "")
         task_priority = task.get("priority", 5)
         task_category = task.get("category", "general")
@@ -458,12 +458,12 @@ async def execute_single_task(task: dict, cycle_session: str):
             f"- GOOD: \"Στάλθηκε η εικόνα book cover στο stefanos.drakos@gmail.com\"\n"
             f"- BAD: \"I'll send the image via microsoft-graph-email skill's send_email.py\"\n\n"
             f"## STEPS (follow exactly)\n"
-            f"1. `python mem_cli.py start_task {task_id}`\n"
+            f"1. `agelclaw-mem start_task {task_id}`\n"
             f"2. Do ONLY what the task description says\n"
             f"3. Save outputs to {task_folder}\n"
-            f"4. `python mem_cli.py complete_task {task_id} \"<result in Greek>\"`\n"
+            f"4. `agelclaw-mem complete_task {task_id} \"<result in Greek>\"`\n"
             f"5. STOP. Do not continue after complete_task.\n\n"
-            f"Use `python mem_cli.py <command> [args]` via Bash for memory/skill operations."
+            f"Use `agelclaw-mem <command> [args]` via Bash for memory/skill operations."
         )
 
         # Route task to provider (tasks can specify provider in context metadata)
@@ -692,16 +692,16 @@ async def execute_subagent_task(task: dict, cycle_session: str):
             f"WORKING DIR: {proactive_dir}\n\n"
             f"## SKILL-FIRST EXECUTION (MANDATORY — follow this before ANY work)\n"
             f"Before executing the task:\n"
-            f"1. Run: `python mem_cli.py find_skill \"<task description>\"`\n"
-            f"2. If skill found -> run: `python mem_cli.py skill_content <name>` -> follow its instructions\n"
+            f"1. Run: `agelclaw-mem find_skill \"<task description>\"`\n"
+            f"2. If skill found -> run: `agelclaw-mem skill_content <name>` -> follow its instructions\n"
             f"3. If NO skill found:\n"
             f"   a. Read the skill-creator guide: `cat .Claude/Skills/skill-creator/SKILL.md`\n"
             f"   b. Research the topic using available tools (Bash, Read, WebSearch)\n"
-            f"   c. Create skill: `python mem_cli.py create_skill <name> \"<desc>\" \"<body>\"`\n"
-            f"   d. Add scripts: `python mem_cli.py add_script <name> <file> \"<code>\"`\n"
-            f"   e. Add references if needed: `python mem_cli.py add_ref <name> <file> \"<content>\"`\n"
+            f"   c. Create skill: `agelclaw-mem create_skill <name> \"<desc>\" \"<body>\"`\n"
+            f"   d. Add scripts: `agelclaw-mem add_script <name> <file> \"<code>\"`\n"
+            f"   e. Add references if needed: `agelclaw-mem add_ref <name> <file> \"<content>\"`\n"
             f"   f. Execute the task using the newly created skill\n"
-            f"4. After execution: `python mem_cli.py update_skill <name> \"<updated body>\"` if improvements found\n\n"
+            f"4. After execution: `agelclaw-mem update_skill <name> \"<updated body>\"` if improvements found\n\n"
             f"## SKILL CREATION RULES\n"
             f"- Create skills proactively — every new domain should get a skill\n"
             f"- Follow the skill-creator guide at `.Claude/Skills/skill-creator/SKILL.md`\n"
@@ -719,13 +719,13 @@ async def execute_subagent_task(task: dict, cycle_session: str):
             f"- Write ONLY the outcome\n"
             f"- NO technical steps, NO English\n\n"
             f"## STEPS (follow exactly)\n"
-            f"1. `python mem_cli.py start_task {task_id}`\n"
+            f"1. `agelclaw-mem start_task {task_id}`\n"
             f"2. SKILL-FIRST: find or create the right skill (see above)\n"
             f"3. Execute the task using the skill's scripts and instructions\n"
             f"4. Save outputs to {task_folder}\n"
-            f"5. `python mem_cli.py complete_task {task_id} \"<result in Greek>\"`\n"
+            f"5. `agelclaw-mem complete_task {task_id} \"<result in Greek>\"`\n"
             f"6. STOP. Do not continue after complete_task.\n\n"
-            f"Use `python mem_cli.py <command> [args]` via Bash for memory/skill operations."
+            f"Use `agelclaw-mem <command> [args]` via Bash for memory/skill operations."
         )
 
         # Route to provider
@@ -1275,7 +1275,26 @@ async def events():
 # Entry point
 # ─────────────────────────────────────────────────────────
 
+async def run_daemon():
+    """Entry point for `agelclaw daemon` CLI command."""
+    import uvicorn as _uv
+    os.environ.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "0")
+    memory.kv_set("daemon_last_start", datetime.now().isoformat())
+    memory.kv_set("daemon_status", "running")
+    log.info("Agent Daemon starting (parallel execution)")
+    log.info(f"   API: http://localhost:{API_PORT}")
+    log.info(f"   Interval: {CHECK_INTERVAL}s")
+    log.info(f"   Max concurrent: {MAX_CONCURRENT_TASKS}")
+    log.info(f"   Max tasks/cycle: {MAX_TASKS_PER_CYCLE}")
+    log.info(f"   Database: {memory.db_path}")
+    config = _uv.Config(app, host="0.0.0.0", port=API_PORT, log_level="info")
+    server = _uv.Server(config)
+    await server.serve()
+
+
 if __name__ == "__main__":
+    import asyncio as _asyncio
+    _asyncio.run(run_daemon())
     # Remove output token limit — let Claude produce as much as needed
     os.environ.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "0")
 
