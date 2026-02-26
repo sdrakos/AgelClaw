@@ -197,28 +197,25 @@ async def run_query(user_input: str) -> str:
     )
 
     full_response = []
-    tool_count = 0
-    has_printed_text = False
+    in_tools = False
 
     async for message in query(prompt=prompt_with_history, options=options):
         if isinstance(message, AssistantMessage):
             for block in message.content:
                 if isinstance(block, TextBlock):
-                    # Clear the "working" line before printing text
-                    if tool_count > 0 and not has_printed_text:
-                        print("\r" + " " * 40 + "\r", end="", flush=True)
+                    if in_tools:
+                        # Clear "Working..." and move to new line
+                        print("\r" + " " * 20 + "\r", end="", flush=True)
+                        in_tools = False
                     print(block.text, end="", flush=True)
                     full_response.append(block.text)
-                    has_printed_text = True
                 elif isinstance(block, ToolUseBlock):
-                    tool_count += 1
-                    # Show a single updating "working" line
-                    dots = "." * ((tool_count % 3) + 1)
-                    print(f"\r   Working{dots}   ", end="", flush=True)
+                    if not in_tools:
+                        in_tools = True
+                        print("\n   Working...", end="", flush=True)
 
-    # Clean up working indicator
-    if tool_count > 0 and not has_printed_text:
-        print("\r" + " " * 40 + "\r", end="", flush=True)
+    if in_tools:
+        print("\r" + " " * 20 + "\r", end="", flush=True)
 
     return "\n".join(full_response)
 
