@@ -2,7 +2,12 @@
 setlocal enabledelayedexpansion
 title AgelClaw Installer
 color 0A
-chcp 65001 >nul 2>&1
+
+:: Keep window open no matter what - this is the FIRST line
+if "%1"=="" (
+    cmd /k "%~f0" run
+    exit /b
+)
 
 echo.
 echo  ==========================================
@@ -14,37 +19,40 @@ echo  This will install everything you need.
 echo.
 
 :: ============================================
-:: Step 0: Choose installation folder (GUI)
+:: Step 0: Choose installation folder
 :: ============================================
 set "DEFAULT_DIR=%USERPROFILE%\.agelclaw"
 
-echo  Choose where to install AgelClaw.
+echo  Where do you want to install AgelClaw?
+echo.
 echo  Default: %DEFAULT_DIR%
 echo.
-echo  A folder picker window will open now...
+echo  Opening folder picker...
 echo.
 
-:: Use PowerShell to show a FolderBrowserDialog
-for /f "delims=" %%F in ('powershell -NoProfile -Command ^
-  "Add-Type -AssemblyName System.Windows.Forms; ^
-   $dlg = New-Object System.Windows.Forms.FolderBrowserDialog; ^
-   $dlg.Description = 'Choose AgelClaw installation folder'; ^
-   $dlg.RootFolder = 'MyComputer'; ^
-   $dlg.SelectedPath = '%DEFAULT_DIR%'; ^
-   $dlg.ShowNewFolderButton = $true; ^
-   $result = $dlg.ShowDialog(); ^
-   if ($result -eq 'OK') { $dlg.SelectedPath } else { 'CANCELLED' }"') do set "INSTALL_DIR=%%F"
+:: Try GUI folder picker via PowerShell
+set "INSTALL_DIR="
+for /f "delims=" %%F in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "Add-Type -AssemblyName System.Windows.Forms; $dlg = New-Object System.Windows.Forms.FolderBrowserDialog; $dlg.Description = 'Choose AgelClaw installation folder'; $dlg.SelectedPath = $env:USERPROFILE; $dlg.ShowNewFolderButton = $true; if ($dlg.ShowDialog() -eq 'OK') { $dlg.SelectedPath } else { 'CANCELLED' }" 2^>nul') do set "INSTALL_DIR=%%F"
+
+:: If PowerShell failed, fallback to text input
+if "%INSTALL_DIR%"=="" (
+    echo  Folder picker did not open.
+    echo  Type the folder path, or press Enter for default:
+    echo.
+    set /p "INSTALL_DIR=  Folder [%DEFAULT_DIR%]: "
+)
+if "%INSTALL_DIR%"=="" set "INSTALL_DIR=%DEFAULT_DIR%"
 
 if "%INSTALL_DIR%"=="CANCELLED" (
     echo.
-    echo  Installation cancelled by user.
+    echo  Installation cancelled.
     echo.
-    pause
+    echo  Press any key to close...
+    pause >nul
     exit /b 0
 )
 
-if "%INSTALL_DIR%"=="" set "INSTALL_DIR=%DEFAULT_DIR%"
-
+echo.
 echo  Install folder: %INSTALL_DIR%
 echo.
 
@@ -79,7 +87,8 @@ if %errorlevel% neq 0 (
         echo.
         echo  After installing Python, run this installer again.
         echo.
-        pause
+        echo  Press any key to close...
+        pause >nul
         exit /b 1
     )
     echo.
@@ -92,7 +101,8 @@ if %errorlevel% neq 0 (
     echo  DOUBLE-CLICK install.bat again.
     echo  ===========================================
     echo.
-    pause
+    echo  Press any key to close...
+    pause >nul
     exit /b 0
 )
 for /f "tokens=*" %%i in ('python --version 2^>^&1') do echo  OK: %%i
@@ -120,7 +130,8 @@ if %errorlevel% neq 0 (
         echo.
         echo  After installing Node.js, run this installer again.
         echo.
-        pause
+        echo  Press any key to close...
+        pause >nul
         exit /b 1
     )
     echo.
@@ -133,7 +144,8 @@ if %errorlevel% neq 0 (
     echo  DOUBLE-CLICK install.bat again.
     echo  ===========================================
     echo.
-    pause
+    echo  Press any key to close...
+    pause >nul
     exit /b 0
 )
 for /f "tokens=*" %%i in ('node --version 2^>^&1') do echo  OK: Node.js %%i
@@ -155,7 +167,8 @@ if %errorlevel% neq 0 (
     echo    Right-click install.bat - Run as administrator
     echo  ===========================================
     echo.
-    pause
+    echo  Press any key to close...
+    pause >nul
     exit /b 1
 )
 for /f "tokens=*" %%i in ('claude --version 2^>^&1') do echo  OK: Claude Code %%i
@@ -199,7 +212,8 @@ if %errorlevel% neq 0 (
     echo  Make sure you have internet and try again.
     echo  ===========================================
     echo.
-    pause
+    echo  Press any key to close...
+    pause >nul
     exit /b 1
 )
 echo.
@@ -230,11 +244,6 @@ echo echo.
 echo agelclaw
 echo pause
 ) > "%DESKTOP%\AgelClaw.bat"
-
-:: ============================================
-:: Save install path for future reference
-:: ============================================
-echo %INSTALL_DIR%> "%INSTALL_DIR%\.install_path"
 
 :: ============================================
 :: Final summary
@@ -281,4 +290,5 @@ echo  All done! You can close this window.
 echo  To chat, double-click AgelClaw on Desktop.
 echo  ==========================================
 echo.
-pause
+echo  Press any key to close...
+pause >nul
