@@ -1,6 +1,8 @@
 @echo off
+setlocal enabledelayedexpansion
 title AgelClaw Installer
 color 0A
+chcp 65001 >nul 2>&1
 
 echo.
 echo  ==========================================
@@ -9,13 +11,52 @@ echo   Self-evolving AI Agent for your desktop
 echo  ==========================================
 echo.
 echo  This will install everything you need.
-echo  Just follow the prompts.
 echo.
-echo  Press any key to start...
-pause >nul
 
-:: Step 1: Check Python
+:: ============================================
+:: Step 0: Choose installation folder (GUI)
+:: ============================================
+set "DEFAULT_DIR=%USERPROFILE%\.agelclaw"
+
+echo  Choose where to install AgelClaw.
+echo  Default: %DEFAULT_DIR%
 echo.
+echo  A folder picker window will open now...
+echo.
+
+:: Use PowerShell to show a FolderBrowserDialog
+for /f "delims=" %%F in ('powershell -NoProfile -Command ^
+  "Add-Type -AssemblyName System.Windows.Forms; ^
+   $dlg = New-Object System.Windows.Forms.FolderBrowserDialog; ^
+   $dlg.Description = 'Choose AgelClaw installation folder'; ^
+   $dlg.RootFolder = 'MyComputer'; ^
+   $dlg.SelectedPath = '%DEFAULT_DIR%'; ^
+   $dlg.ShowNewFolderButton = $true; ^
+   $result = $dlg.ShowDialog(); ^
+   if ($result -eq 'OK') { $dlg.SelectedPath } else { 'CANCELLED' }"') do set "INSTALL_DIR=%%F"
+
+if "%INSTALL_DIR%"=="CANCELLED" (
+    echo.
+    echo  Installation cancelled by user.
+    echo.
+    pause
+    exit /b 0
+)
+
+if "%INSTALL_DIR%"=="" set "INSTALL_DIR=%DEFAULT_DIR%"
+
+echo  Install folder: %INSTALL_DIR%
+echo.
+
+:: Create install dir if needed
+if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
+
+:: Set environment variable so agelclaw init uses this folder
+set "AGELCLAW_HOME=%INSTALL_DIR%"
+
+:: ============================================
+:: Step 1: Check Python
+:: ============================================
 echo  [1/6] Checking Python...
 python --version >nul 2>&1
 if %errorlevel% neq 0 (
@@ -54,9 +95,11 @@ if %errorlevel% neq 0 (
     pause
     exit /b 0
 )
-for /f "tokens=*" %%i in ('python --version 2^>^&1') do echo  Found: %%i
+for /f "tokens=*" %%i in ('python --version 2^>^&1') do echo  OK: %%i
 
+:: ============================================
 :: Step 2: Check Node.js
+:: ============================================
 echo.
 echo  [2/6] Checking Node.js...
 node --version >nul 2>&1
@@ -93,9 +136,11 @@ if %errorlevel% neq 0 (
     pause
     exit /b 0
 )
-for /f "tokens=*" %%i in ('node --version 2^>^&1') do echo  Found: Node.js %%i
+for /f "tokens=*" %%i in ('node --version 2^>^&1') do echo  OK: Node.js %%i
 
+:: ============================================
 :: Step 3: Install Claude Code
+:: ============================================
 echo.
 echo  [3/6] Installing Claude Code...
 echo  (this may take a minute)
@@ -115,7 +160,9 @@ if %errorlevel% neq 0 (
 )
 for /f "tokens=*" %%i in ('claude --version 2^>^&1') do echo  OK: Claude Code %%i
 
+:: ============================================
 :: Step 4: Claude Login
+:: ============================================
 echo.
 echo  [4/6] Checking Claude subscription...
 echo.
@@ -137,7 +184,9 @@ if %errorlevel% equ 0 (
     )
 )
 
+:: ============================================
 :: Step 5: Install AgelClaw
+:: ============================================
 echo.
 echo  [5/6] Installing AgelClaw package...
 echo  (downloading from GitHub, may take a minute)
@@ -156,19 +205,24 @@ if %errorlevel% neq 0 (
 echo.
 for /f "tokens=*" %%i in ('agelclaw --version 2^>^&1') do echo  OK: %%i
 
-:: Step 6: Initialize
+:: ============================================
+:: Step 6: Initialize project in chosen folder
+:: ============================================
 echo.
-echo  [6/6] Setting up AgelClaw project...
+echo  [6/6] Setting up AgelClaw in: %INSTALL_DIR%
 echo.
-agelclaw init
+agelclaw init "%INSTALL_DIR%"
 
+:: ============================================
 :: Create desktop shortcut
+:: ============================================
 echo.
 echo  Creating desktop shortcut...
 set "DESKTOP=%USERPROFILE%\Desktop"
 (
 echo @echo off
 echo title AgelClaw - AI Agent
+echo set "AGELCLAW_HOME=%INSTALL_DIR%"
 echo echo.
 echo echo  Starting AgelClaw...
 echo echo  Type 'quit' to exit.
@@ -177,7 +231,14 @@ echo agelclaw
 echo pause
 ) > "%DESKTOP%\AgelClaw.bat"
 
+:: ============================================
+:: Save install path for future reference
+:: ============================================
+echo %INSTALL_DIR%> "%INSTALL_DIR%\.install_path"
+
+:: ============================================
 :: Final summary
+:: ============================================
 echo.
 echo.
 echo  ==========================================
@@ -191,12 +252,12 @@ for /f "tokens=*" %%i in ('node --version 2^>^&1') do echo    - Node.js %%i
 for /f "tokens=*" %%i in ('claude --version 2^>^&1') do echo    - Claude Code %%i
 for /f "tokens=*" %%i in ('agelclaw --version 2^>^&1') do echo    - %%i
 echo.
-echo  Project folder:
-echo    %USERPROFILE%\.agelclaw\
+echo  ==========================================
+echo  Installed to:
+echo    %INSTALL_DIR%
 echo.
 echo  Desktop shortcut:
 echo    %DESKTOP%\AgelClaw.bat
-echo.
 echo  ==========================================
 echo.
 echo  HOW TO USE:
