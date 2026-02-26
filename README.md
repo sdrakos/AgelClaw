@@ -6,7 +6,22 @@ By **Dr. Stefanos Drakos** | [agel.ai](https://agel.ai)
 
 ---
 
-## Prerequisites
+## Quick Install (Windows — no experience needed)
+
+Download and double-click **[install.bat](https://raw.githubusercontent.com/sdrakos/AgelClaw/main/install.bat)** — it installs everything automatically:
+
+- Python, Node.js (if missing)
+- Claude Code + login
+- AgelClaw + project setup
+- Desktop shortcut
+
+After installation, just double-click **AgelClaw** on your Desktop to chat.
+
+---
+
+## Manual Installation (developers)
+
+### Prerequisites
 
 | Requirement | How to get it |
 |-------------|---------------|
