@@ -159,15 +159,34 @@ def update():
     click.echo(f"Current version: {__version__}")
     click.echo("Checking for updates...")
     click.echo()
+
+    pip_url = "git+https://github.com/sdrakos/AgelClaw.git"
+
+    # Try normal install first
     result = subprocess.run(
         [sys.executable, "-m", "pip", "install", "--upgrade",
-         "--force-reinstall", "--no-deps",
-         "git+https://github.com/sdrakos/AgelClaw.git"],
-        capture_output=False,
+         "--force-reinstall", "--no-deps", pip_url],
+        capture_output=True, text=True,
     )
+
+    # If .exe locked, retry with --user
+    if result.returncode != 0 and "WinError 32" in (result.stderr or ""):
+        click.echo("  Retrying with --user (exe is locked)...")
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--upgrade",
+             "--force-reinstall", "--no-deps", "--user", pip_url],
+            capture_output=False,
+        )
+
+    elif result.returncode != 0:
+        # Show the error output
+        if result.stdout:
+            click.echo(result.stdout)
+        if result.stderr:
+            click.echo(result.stderr)
+
     click.echo()
     if result.returncode == 0:
-        # Show new version
         from importlib.metadata import version as get_version
         try:
             new_ver = get_version("agelclaw")
