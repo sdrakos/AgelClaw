@@ -156,10 +156,12 @@ def update():
     """Update AgelClaw to the latest version."""
     import subprocess
 
+    click.echo(f"Current version: {__version__}")
     click.echo("Checking for updates...")
     click.echo()
     result = subprocess.run(
         [sys.executable, "-m", "pip", "install", "--upgrade",
+         "--force-reinstall", "--no-deps",
          "git+https://github.com/sdrakos/AgelClaw.git"],
         capture_output=False,
     )
