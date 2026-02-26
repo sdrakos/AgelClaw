@@ -6,45 +6,99 @@ By **Dr. Stefanos Drakos** | [agel.ai](https://agel.ai)
 
 ---
 
-## Install
+## Prerequisites
+
+| Requirement | How to get it |
+|-------------|---------------|
+| **Python 3.11+** | [python.org/downloads](https://www.python.org/downloads/) |
+| **Node.js 18+** | [nodejs.org](https://nodejs.org/) |
+| **Claude subscription** | Max or Pro plan at [claude.ai](https://claude.ai/) |
+
+## Installation (5 minutes)
+
+### Step 1 — Install Claude Code
+
+```bash
+npm install -g @anthropic-ai/claude-code
+```
+
+### Step 2 — Log in to your Claude account
+
+```bash
+claude auth login
+```
+
+This opens your browser. Sign in with the account that has a Max or Pro subscription.
+
+Verify:
+```bash
+claude auth status
+# Should show: loggedIn: true, subscriptionType: max (or pro)
+```
+
+### Step 3 — Install AgelClaw
 
 ```bash
 pip install git+https://github.com/sdrakos/AgelClaw.git
 ```
 
-With optional providers:
-
+With all optional features (OpenAI, Outlook email, semantic search):
 ```bash
 pip install "agelclaw[all] @ git+https://github.com/sdrakos/AgelClaw.git"
 ```
 
-## Quick Start
+### Step 4 — Initialize and configure
 
 ```bash
-# 1. Initialize project directory
 agelclaw init
-
-# 2. Configure API keys (interactive wizard)
 agelclaw setup
-
-# 3. Start the Telegram bot
-agelclaw telegram
 ```
 
-## CLI Commands
+The setup wizard will:
+1. Verify your Claude subscription (or help you log in)
+2. Ask for API keys (OpenAI is optional)
+3. Configure Telegram bot (optional)
+4. Set ports and limits
+
+### Step 5 — Start using
+
+```bash
+# Interactive chat (like claude)
+agelclaw
+
+# Or start the Telegram bot
+agelclaw telegram
+
+# Or start the web UI
+agelclaw web
+```
+
+---
+
+## Usage
+
+### Interactive Chat
+
+```bash
+agelclaw                          # Open interactive chat
+agelclaw "summarize my tasks"     # Chat with initial prompt
+agelclaw -p "what tasks are due?" # Single answer, then exit
+```
+
+### CLI Commands
 
 | Command | Description |
 |---------|-------------|
+| `agelclaw` | Interactive chat (default) |
 | `agelclaw init [dir]` | Create project directory with config templates and default skills |
-| `agelclaw setup` | Interactive wizard for API keys, provider, Telegram token |
+| `agelclaw setup` | Interactive wizard for Claude auth, API keys, Telegram |
 | `agelclaw daemon` | Start background task daemon (`:8420`) |
 | `agelclaw web` | Start web UI + API server (`:8000`) |
 | `agelclaw telegram` | Start Telegram bot |
 | `agelclaw status` | Show daemon status + task statistics |
-| `agelclaw chat` | Interactive CLI chat |
 | `agelclaw --version` | Show version |
 
-## Memory CLI (used by agents)
+### Memory CLI (used by agents internally)
 
 ```bash
 agelclaw-mem context              # Full context summary
@@ -53,6 +107,8 @@ agelclaw-mem add_task "title" "description" [priority] [due_at] [recurring]
 agelclaw-mem skills               # List installed skills
 agelclaw-mem search "query"       # Semantic search
 ```
+
+---
 
 ## Architecture
 
@@ -109,12 +165,6 @@ The project directory (where all mutable data lives) is resolved in this order:
 3. `~/.agelclaw/` default
 
 You can override per-command: `agelclaw --home /path/to/project daemon`
-
-## Requirements
-
-- Python >= 3.11
-- Claude Agent SDK (`pip install claude-agent-sdk`)
-- At least one API key (Anthropic or OpenAI)
 
 ## Optional Dependencies
 
