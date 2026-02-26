@@ -2,8 +2,9 @@
 .env
 config.yaml
 
-# Data
+# Data (runtime)
 data/
+!src/agelclaw/data/
 logs/
 reports/
 tasks/

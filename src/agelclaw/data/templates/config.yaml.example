@@ -1,0 +1,22 @@
+# AgelClaw Agent Configuration
+# =============================
+# Fill in your API key(s) below, or use the Settings page in the UI.
+# At least one API key is required (Anthropic or OpenAI).
+# Values here can be overridden by environment variables.
+
+anthropic_api_key: ""        # or set ANTHROPIC_API_KEY env var
+openai_api_key: ""           # or set OPENAI_API_KEY env var
+default_provider: "auto"     # claude | openai | auto
+telegram_bot_token: ""       # optional — for Telegram bot integration
+telegram_allowed_users: ""   # comma-separated Telegram user IDs
+api_port: 8000
+daemon_port: 8420
+cost_limit_daily: 10.00
+max_concurrent_tasks: 3
+check_interval: 300
+
+# Outlook / Microsoft Graph API (optional — for email digest feature)
+outlook_client_id: ""
+outlook_client_secret: ""
+outlook_tenant_id: ""
+outlook_user_email: ""
