@@ -21,16 +21,36 @@ import click
 from agelclaw import __version__
 
 
-@click.group()
+@click.group(invoke_without_command=True)
 @click.version_option(__version__, prog_name="agelclaw")
 @click.option("--home", envvar="AGELCLAW_HOME", default=None,
               help="Override project directory (sets AGELCLAW_HOME).")
-def main(home):
+@click.option("-p", "--print", "print_mode", is_flag=True,
+              help="Non-interactive: answer a single prompt and exit.")
+@click.argument("prompt", required=False, default=None)
+@click.pass_context
+def main(ctx, home, print_mode, prompt):
     """AgelClaw — Self-evolving AI agent with persistent memory and skills."""
     if home:
         os.environ["AGELCLAW_HOME"] = str(home)
         from agelclaw.project import reset_project_dir
         reset_project_dir()
+
+    # No subcommand → interactive chat (like `claude`)
+    if ctx.invoked_subcommand is None:
+        import asyncio
+        if print_mode and prompt:
+            # Single-shot mode: agelclaw -p "question"
+            from agelclaw.cli import single_query
+            asyncio.run(single_query(prompt))
+        elif prompt:
+            # Start chat with initial prompt
+            from agelclaw.cli import main as cli_main
+            asyncio.run(cli_main(initial_prompt=prompt))
+        else:
+            # Pure interactive mode
+            from agelclaw.cli import main as cli_main
+            asyncio.run(cli_main())
 
 
 @main.command()

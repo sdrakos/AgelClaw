@@ -181,18 +181,27 @@ async def run_query(user_input: str) -> str:
     return "\n".join(full_response)
 
 
-async def main():
+async def single_query(prompt: str):
+    """Non-interactive mode: answer a single prompt and exit (agelclaw -p)."""
+    if sys.platform == "win32":
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
+    memory.log_conversation(role="user", content=prompt)
+    response = await run_query(prompt)
+    print(response)
+    memory.log_conversation(role="assistant", content=response[:2000])
+
+
+async def main(initial_prompt: str = None):
     # Fix Windows console encoding
     if sys.platform == "win32":
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
-    print("Self-Evolving Assistant (Interactive)")
+    print("AgelClaw — Self-Evolving Assistant")
     print("   Memory: persistent (SQLite)")
-    print("   Daemon: runs via PM2 in background")
-    print()
-    print("   Commands: 'status', 'history', 'skills', 'stats', 'quit'")
-    print("   Or just chat naturally!")
+    print("   Type 'quit' to exit, or just chat.")
     print()
 
     # Show quick status
@@ -204,6 +213,15 @@ async def main():
     if due:
         print(f"   {len(due)} tasks are due now!")
     print()
+
+    # Process initial prompt if provided (agelclaw "do something")
+    if initial_prompt:
+        print(f"You: {initial_prompt}")
+        memory.log_conversation(role="user", content=initial_prompt)
+        print("\nAgent: ", end="", flush=True)
+        response = await run_query(initial_prompt)
+        print("\n")
+        memory.log_conversation(role="assistant", content=response[:2000])
 
     while True:
         try:
