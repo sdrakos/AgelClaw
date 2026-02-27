@@ -289,5 +289,13 @@ def release(rel_version, extra_files):
     upload_release(version=rel_version, extra_files=list(extra_files) or None)
 
 
+@main.command()
+@click.argument("new_version")
+def bump(new_version):
+    """Bump version across all project files (pyproject, init, buypage, installer)."""
+    from agelclaw.version_bump import bump as do_bump
+    do_bump(new_version)
+
+
 if __name__ == "__main__":
     main()
