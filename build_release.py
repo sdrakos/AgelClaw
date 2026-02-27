@@ -31,6 +31,7 @@ ZIP_INCLUDE = [
     "requirements.txt", "start.bat", "start.sh", "README.md", "MANUAL.md",
     "core/", "agent_wrappers/", "skills/", "scripts/", "subagents/",
     "react-claude-chat/dist/", "react-claude-chat/package.json",
+    "AgelClaw-v{version}-install.bat",
 ]
 
 EXCLUDE_PATTERNS = [
@@ -74,7 +75,8 @@ def build_zip(version: str):
     file_count = 0
 
     with ZipFile(zip_path, "w", ZIP_DEFLATED) as zf:
-        for entry in ZIP_INCLUDE:
+        for raw_entry in ZIP_INCLUDE:
+            entry = raw_entry.format(version=version)
             src = PROACTIVE_DIR / entry
             if not src.exists():
                 print(f"  SKIP (not found): {entry}")
