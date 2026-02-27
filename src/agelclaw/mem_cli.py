@@ -57,6 +57,13 @@ Subagent commands:
 Task folder commands:
   task_folder <id>                  - Get/create task folder path
 
+Daemon control commands:
+  running_tasks                     - List currently executing tasks
+  cancel_task <id>                  - Cancel a running task/subagent
+  update_task <id> "<message>"      - Update running task (cancel + restart with appended instructions)
+  run_task <id>                     - Force-execute a pending task immediately
+  daemon_status                     - Full daemon status (state, running tasks, last cycle)
+
 Semantic search commands:
   search "<query>" [limit] [--table <name>]  - AI-powered semantic search
   embed_backfill                    - Backfill embeddings for existing data
@@ -578,6 +585,62 @@ def main():
                 total = info.get("total", 0)
                 pct = (embedded / total * 100) if total > 0 else 0
                 print(f"  {tbl}: {embedded}/{total} ({pct:.0f}%)")
+
+    # ── Daemon control commands ──────────────────────────────
+
+    elif cmd == "running_tasks":
+        try:
+            data = json.loads(urlopen(f"http://localhost:{DAEMON_PORT}/running", timeout=5).read())
+            tasks = data.get("running_tasks", [])
+            if not tasks:
+                print("No tasks currently running.")
+            else:
+                print(f"Currently running ({len(tasks)}):")
+                for t in tasks:
+                    print(f"  #{t.get('task_id', '?')} [{t.get('subagent', 'global')}] {t.get('title', '')}  (started: {t.get('started_at', '?')})")
+        except (URLError, OSError):
+            print("Daemon not running or not reachable.")
+
+    elif cmd == "cancel_task":
+        task_id = sys.argv[2]
+        try:
+            req = Request(f"http://localhost:{DAEMON_PORT}/tasks/{task_id}/cancel", method="POST")
+            data = json.loads(urlopen(req, timeout=10).read())
+            print(json.dumps(data, indent=2, default=str))
+        except (URLError, OSError) as e:
+            print(f"Failed to cancel task #{task_id}: {e}")
+
+    elif cmd == "update_task":
+        task_id = sys.argv[2]
+        message = sys.argv[3] if len(sys.argv) > 3 else ""
+        try:
+            payload = json.dumps({"message": message}).encode()
+            req = Request(
+                f"http://localhost:{DAEMON_PORT}/tasks/{task_id}/update",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            data = json.loads(urlopen(req, timeout=10).read())
+            print(json.dumps(data, indent=2, default=str))
+        except (URLError, OSError) as e:
+            print(f"Failed to update task #{task_id}: {e}")
+
+    elif cmd == "run_task":
+        task_id = sys.argv[2]
+        try:
+            req = Request(f"http://localhost:{DAEMON_PORT}/execute_task/{task_id}", method="POST")
+            data = json.loads(urlopen(req, timeout=10).read())
+            print(json.dumps(data, indent=2, default=str))
+        except (URLError, OSError) as e:
+            print(f"Failed to execute task #{task_id}: {e}")
+
+    elif cmd == "daemon_status":
+        try:
+            data = json.loads(urlopen(f"http://localhost:{DAEMON_PORT}/status", timeout=5).read())
+            print(json.dumps(data, indent=2, default=str))
+        except (URLError, OSError):
+            print("Daemon not running or not reachable.")
 
     # ── Task folder commands ──────────────────────────────────
 

@@ -113,6 +113,17 @@ Use `agelclaw-mem <command>` via Bash for ALL memory and skill operations:
 - After creating a task, ALWAYS tell the user "Task #N created".
 - To wake the daemon immediately: `curl -s -X POST http://localhost:8420/wake`
 
+## DAEMON CONTROL (running tasks & subagents)
+  agelclaw-mem running_tasks                        # List currently executing tasks
+  agelclaw-mem cancel_task <id>                     # Stop a running task/subagent
+  agelclaw-mem update_task <id> "<new instructions>"  # Edit running task (restart with updated desc)
+  agelclaw-mem run_task <id>                        # Force-execute a pending task now
+  agelclaw-mem daemon_status                        # Daemon state + running tasks + last cycle
+
+When user says "stop task", "σταμάτα", "cancel", "ακύρωσε" → use cancel_task
+When user says "change the task", "άλλαξε", "update" → use update_task
+When user asks "what's running", "τι τρέχει" → use running_tasks
+
 ## SUBAGENT CREATION — MANDATORY RULES
 When the user asks to "create a subagent", "δημιούργησε subagent", "φτιάξε subagent", or mentions specialized/parallel agent execution, you MUST follow ALL these steps IN ORDER:
 
