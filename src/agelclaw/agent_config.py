@@ -382,21 +382,24 @@ SYSTEM_PROMPT = get_system_prompt()
 
 
 def build_prompt_with_history(user_text: str, memory) -> str:
-    """Build prompt with recent + keyword-relevant older conversation history.
+    """Build prompt with recent conversation history + fast keyword recall.
 
     Shared between api_server.py and telegram_bot.py so both channels
     see the same unified conversation memory.
+
+    Performance: uses only SQLite queries (no external API calls).
+    Semantic search is available on-demand via `agelclaw-mem search "..."`.
     """
     session_id = SHARED_SESSION_ID
 
-    # Recent messages (last 10 pairs = 20 messages)
+    # Recent messages (last 10 pairs = 20 messages) — instant SQLite query
     recent = memory.get_conversation_history(session_id=session_id, limit=20)
 
     if not recent:
         return user_text
 
-    # Search for older relevant messages by keyword
-    relevant_older = _find_relevant_history(user_text, session_id, recent)
+    # Fast keyword recall from older conversations — SQLite LIKE only, no embedding API
+    relevant_older = _find_relevant_history_fast(user_text, session_id, recent)
 
     context_parts = []
 
@@ -425,45 +428,24 @@ def build_prompt_with_history(user_text: str, memory) -> str:
         + "\n\nRespond to the latest user message. You have full context of what was discussed before."
         + "\n\nREMINDER: You have ALL tools available (Read, Write, Edit, Bash, Grep, Glob, WebSearch, WebFetch). "
         + "Use `agelclaw-mem` via Bash for memory/skill/task operations. "
+        + "For deeper memory recall, run `agelclaw-mem search \"query\"` (semantic search). "
         + "Execute work directly — don't just delegate unless it's a background/scheduled task."
     )
 
 
-def _find_relevant_history(user_text: str, session_id: str, recent_msgs: list) -> list:
-    """Search older conversation history for messages relevant to the current query.
+def _find_relevant_history_fast(user_text: str, session_id: str, recent_msgs: list) -> list:
+    """Fast keyword-based recall from older conversation history.
 
-    Uses semantic search (embeddings) as primary method, falls back to keyword LIKE.
+    Uses SQLite LIKE queries only — no external API calls, <5ms.
+    For deeper semantic search the agent can run `agelclaw-mem search` on-demand.
     """
     recent_ids = {msg.get("id") for msg in recent_msgs if msg.get("id")}
 
-    # Try semantic search first
-    try:
-        from agelclaw.memory import Memory
-        mem = Memory()
-        semantic_results = mem.semantic_search(user_text, tables=["conversations"], limit=10)
-        if semantic_results:
-            # Fetch full conversation rows for the semantic matches
-            conn = sqlite3.connect(str(DB_PATH))
-            conn.row_factory = sqlite3.Row
-            matched = []
-            for sr in semantic_results:
-                row = conn.execute(
-                    "SELECT * FROM conversations WHERE id = ? AND session_id = ?",
-                    (sr["row_id"], session_id),
-                ).fetchone()
-                if row and row["id"] not in recent_ids:
-                    matched.append(dict(row))
-            conn.close()
-            if matched:
-                return list(reversed(matched[:6]))
-    except Exception:
-        pass  # Fall through to keyword search
-
-    # Fallback: keyword-based LIKE search
     skip_words = {
         "θέλω", "μπορείς", "κάνε", "πες", "βρες", "στείλε", "δείξε",
         "αυτό", "αυτά", "εδώ", "εκεί", "τώρα", "μετά", "πριν",
         "that", "this", "have", "with", "from", "what", "send", "show",
+        "please", "can", "the", "and", "for", "you", "are", "was",
     }
     words = [w.lower().strip(".,;:!?\"'()") for w in user_text.split() if len(w) > 3]
     keywords = [w for w in words if w not in skip_words]
