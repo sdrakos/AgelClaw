@@ -278,5 +278,16 @@ def update():
         click.echo("Update failed. Check your internet connection and try again.")
 
 
+@main.command()
+@click.option("--version", "rel_version", default=None,
+              help=f"Version to upload (default: {__version__})")
+@click.option("--file", "extra_files", multiple=True,
+              help="Extra file(s) to upload as release assets.")
+def release(rel_version, extra_files):
+    """Upload installer + assets to GitHub Release."""
+    from agelclaw.release_upload import upload_release
+    upload_release(version=rel_version, extra_files=list(extra_files) or None)
+
+
 if __name__ == "__main__":
     main()
