@@ -78,6 +78,18 @@ agelclaw-mem add_script <name> <file> "code"
 agelclaw-mem add_ref <name> <file> "content"
 agelclaw-mem update_skill <name> "body"
 
+# ── Subagent CLI ──
+agelclaw-mem subagents                    # List installed subagent definitions
+agelclaw-mem subagent_content <name>      # Get full SUBAGENT.md content
+agelclaw-mem create_subagent <name> "desc" "body" [provider] [task_type] [tools_csv]
+agelclaw-mem add_subagent_script <name> <file> "code"
+agelclaw-mem add_subagent_ref <name> <file> "content"
+agelclaw-mem add_subagent_task <subagent> "title" "desc" [pri] [due_at] [recurring]
+agelclaw-mem subagent_tasks <name> [status] [limit]
+agelclaw-mem subagent_stats <name>
+agelclaw-mem cancel_task <id>             # Stop running OR delete scheduled task
+agelclaw-mem delete_task <id>             # Delete task permanently
+
 # ── React UI (dev) ──
 cd proactive/react-claude-chat
 npm install && npm run dev       # Vite :3000, proxies /api→:8000 /daemon→:8420
@@ -157,7 +169,7 @@ proactive/src/agelclaw/           # Python package (pip install)
 │   └── openai_tools.py           # Function tools for OpenAI (bash, read, write, glob, grep)
 └── data/                         # Bundled package data (immutable)
     ├── react_dist/               # Pre-built React chat UI
-    ├── skills/                   # 14 bundled skills (pdf, xlsx, pptx, email, skill-creator, etc.)
+    ├── skills/                   # 15 bundled skills (pdf, xlsx, pptx, email, skill-creator, subagent-creator, etc.)
     └── templates/                # Config + persona templates copied on init
         ├── config.yaml.example
         ├── .env.example
@@ -209,7 +221,13 @@ proactive/src/agelclaw/           # Python package (pip install)
 
 **Hard rules (promoted learnings).** Learnings promoted to rules (`is_rule=1`) are injected into every system prompt via `memory.build_rules_prompt()`. Manage via `agelclaw-mem promote_rule/demote_rule/rules`.
 
-**Subagent system.** Defined in `subagents/<name>/SUBAGENT.md` (YAML frontmatter: provider, task_type, tools). Daemon routes assigned tasks to `execute_subagent_task()` which uses `AgentDefinition` (Claude) or custom system prompt (OpenAI).
+**Subagent system.** Defined in `subagents/<name>/SUBAGENT.md` (YAML frontmatter: provider, task_type, tools) with optional `scripts/` and `references/` dirs. Daemon routes assigned tasks to `execute_subagent_task()` which uses `AgentDefinition` (Claude) or custom system prompt (OpenAI). Create via `agelclaw-mem create_subagent <name> "<desc>" "<body>" [provider] [task_type] [tools_csv]`. Add scripts: `add_subagent_script`. Add references: `add_subagent_ref`. Bundled `subagent-creator` skill guides the agent through proper subagent creation.
+
+**Subagent delegation.** The system prompt enforces that the chat agent MUST delegate to an existing subagent instead of executing long-running work inline. When user requests work matching a subagent (e.g. Diavgeia), the agent creates a task via `add_subagent_task` and responds immediately, freeing the chat. The daemon executes the subagent in the background.
+
+**Confirmation = Execute.** When the user says "ναι", "yes", "nai", "ok" in response to a proposed action, the agent executes immediately using tools — no re-description, no second confirmation.
+
+**cancel_task fallback.** `cancel_task` in mem_cli first tries the daemon endpoint (for running tasks). If daemon returns 404 (task not running), it falls back to `delete_task` (removes from database). This handles both running and scheduled task cancellation.
 
 **Persona files.** `persona/SOUL.md` (values & behavior) and `persona/IDENTITY.md` (name, vibe, user info) are loaded at the top of every system prompt via `_load_persona_files()`. `persona/BOOTSTRAP.md` triggers first-run onboarding — the agent guides the user through setup, updates the profile and IDENTITY.md, then deletes BOOTSTRAP.md. All files are user-editable. Changes take effect within 120s (prompt cache TTL).
 
@@ -218,6 +236,10 @@ proactive/src/agelclaw/           # Python package (pip install)
 **Memory context isolation.** Conversations log `channel_type` ("web", "private", "group") and `chat_id`. In group Telegram chats (`chat_type` = "group"/"supergroup"), the system: (1) skips persona files from the prompt, (2) excludes user profile from context, (3) uses separate "group_chat" session instead of "shared_chat", (4) doesn't recall private conversation history. This prevents leaking personal data in group contexts.
 
 **Telegram allowlist.** `telegram_allowed_users` in config.yaml — comma-separated user IDs. Empty = allow all. Checked by `is_authorized()` in `telegram_bot.py`.
+
+**Telegram terminal logging.** `telegram_bot.py` logs detailed agent activity to the terminal: `[Query start]` with user message, `[Tool #N]` with tool name and arguments (Bash commands, file paths, search queries), `[Agent]` with text output preview, `[Query done]` with elapsed time and response preview, `[Sending]` with chunk count. Enables real-time monitoring of what the agent is doing.
+
+**Telegram notification splitting.** Daemon's `send_telegram_notification()` splits long results into multiple messages (4096 char limit per message) instead of truncating at 400 chars. First message includes the task title header, subsequent messages are continuation text.
 
 ## Configuration (config.yaml)
 

@@ -269,6 +269,10 @@ async def _run_claude_query(prompt: str, chat, channel_type: str = "private") ->
                 for block in message.content:
                     if isinstance(block, TextBlock):
                         full_response.append(block.text)
+                        # Log agent text to terminal (truncated)
+                        preview = block.text.strip().replace("\n", " ")[:120]
+                        if preview:
+                            logger.info(f"[Agent] {preview}")
                     elif isinstance(block, ToolUseBlock):
                         tool_count += 1
                         tool_name = block.name
@@ -286,10 +290,25 @@ async def _run_claude_query(prompt: str, chat, channel_type: str = "private") ->
                                     label = "Installing dependencies..."
                                 elif "python" in cmd.lower() and "mem_cli" in cmd.lower():
                                     label = "Checking memory..."
+                            # Log the actual command
+                            logger.info(f"[Tool #{tool_count}] Bash: {cmd[:150]}")
                         elif tool_name == "WebSearch" and isinstance(block.input, dict):
                             q = block.input.get("query", "")
                             if q:
                                 detail = f' "{q[:40]}"'
+                            logger.info(f"[Tool #{tool_count}] WebSearch: {q[:100]}")
+                        elif tool_name == "Read" and isinstance(block.input, dict):
+                            logger.info(f"[Tool #{tool_count}] Read: {block.input.get('file_path', '')[:100]}")
+                        elif tool_name == "Write" and isinstance(block.input, dict):
+                            logger.info(f"[Tool #{tool_count}] Write: {block.input.get('file_path', '')[:100]}")
+                        elif tool_name == "WebFetch" and isinstance(block.input, dict):
+                            logger.info(f"[Tool #{tool_count}] WebFetch: {block.input.get('url', '')[:100]}")
+                        elif tool_name == "Grep" and isinstance(block.input, dict):
+                            logger.info(f"[Tool #{tool_count}] Grep: {block.input.get('pattern', '')[:60]} in {block.input.get('path', '')[:60]}")
+                        elif tool_name == "Glob" and isinstance(block.input, dict):
+                            logger.info(f"[Tool #{tool_count}] Glob: {block.input.get('pattern', '')[:80]}")
+                        else:
+                            logger.info(f"[Tool #{tool_count}] {tool_name}")
 
                         status_text = f"{label}{detail}"
 
@@ -557,6 +576,9 @@ async def handle_message(update: Update, context) -> None:
 
     # ── Normal agent query
     await update.message.chat.send_action(ChatAction.TYPING)
+    import time as _time
+    _query_start = _time.time()
+    logger.info(f"[Query start] {channel_type} | {user_text[:80]}")
 
     # Build prompt with conversation history from SQLite (shared across all channels)
     # In group mode: restricted context (no profile, no private conversations)
@@ -564,6 +586,10 @@ async def handle_message(update: Update, context) -> None:
 
     # Run the agent query with live progress updates
     response = await run_agent_query_with_progress(prompt_with_context, update.message.chat, channel_type=channel_type)
+
+    _elapsed = _time.time() - _query_start
+    resp_preview = response.strip().replace("\n", " ")[:150] if response else "(empty)"
+    logger.info(f"[Query done] {_elapsed:.1f}s | Response: {resp_preview}")
 
     # Log to memory (log original user text, not the context-enriched prompt)
     # Group messages go to "group_chat" session, private to "shared_chat"
@@ -575,6 +601,7 @@ async def handle_message(update: Update, context) -> None:
 
     # Send response (split if too long)
     chunks = split_message(response)
+    logger.info(f"[Sending] {len(chunks)} chunk(s), {len(response)} chars total")
     for chunk in chunks:
         try:
             await update.message.reply_text(chunk)
