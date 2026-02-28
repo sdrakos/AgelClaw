@@ -2,6 +2,17 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## MANDATORY: Keep This File Updated
+
+**Before every commit and push**, update this CLAUDE.md to reflect any changes made in the session:
+- New design decisions → add to "Key Design Decisions"
+- New files or modules → update "Source Code Map"
+- New CLI commands → update "Installation & Commands"
+- New config keys → update "Configuration"
+- Architecture changes → update "Architecture"
+
+This file is the single source of truth for the codebase. If it's not documented here, the next session won't know about it.
+
 ## What This Is
 
 **AgelClaw v3.1.0** — a self-evolving autonomous assistant with multi-provider support (Claude + OpenAI), persistent memory, skills, and subagents.
@@ -252,6 +263,8 @@ proactive/src/agelclaw/           # Python package (pip install)
 **Clean notifications.** Telegram notifications use the task's `result` field from `complete_task()` — not the raw agent text which includes internal reasoning ("That found the diavgeia skill, not the weather one..."). Only the clean, human-written result reaches the user.
 
 **Shared conversation session.** All 3 interfaces (Telegram, Web UI, CLI) use `session_id="shared_chat"`. When a subagent task completes, the daemon logs a summary to `shared_chat` so the chat agent immediately knows what happened — no need for the user to ask or the agent to search. Group Telegram chats use a separate `"group_chat"` session for privacy.
+
+**Unified system prompt.** All 3 interfaces (CLI, Web UI, Telegram) use `agent_config.get_system_prompt()` and `agent_config.build_prompt_with_history()`. The CLI previously had a hardcoded system prompt that missed subagent delegation rules, tool guards, persona files, and other features. Now all interfaces share the same prompt, tools (`AGENT_TOOLS`), and session (`SHARED_SESSION_ID`) from `agent_config.py`.
 
 ## Configuration (config.yaml)
 
