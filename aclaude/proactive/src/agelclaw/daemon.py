@@ -649,19 +649,21 @@ async def execute_single_task(task: dict, cycle_session: str):
                 "summary": summary[:1000],
             })
 
-            # Send notifications (email + telegram)
+            # Send notifications — use the clean DB result, not the raw agent summary
+            task_final = memory.get_task(task_id)
+            clean_result = (task_final or {}).get("result") or summary
             send_task_notification(
                 task_id=task_id,
                 task_title=task_title,
                 status="completed",
-                result=summary,
+                result=clean_result,
                 duration=duration
             )
             send_telegram_notification(
                 task_id=task_id,
                 task_title=task_title,
                 status="completed",
-                result=summary,
+                result=clean_result,
                 duration=duration
             )
 
@@ -999,9 +1001,11 @@ async def execute_subagent_task(task: dict, cycle_session: str):
                 "summary": summary[:1000],
             })
 
-            # Send notifications
-            send_task_notification(task_id=task_id, task_title=task_title, status="completed", result=summary, duration=duration)
-            send_telegram_notification(task_id=task_id, task_title=task_title, status="completed", result=summary, duration=duration)
+            # Send notifications — use the clean DB result, not the raw agent summary
+            task_final = memory.get_task(task_id)
+            clean_result = (task_final or {}).get("result") or summary
+            send_task_notification(task_id=task_id, task_title=task_title, status="completed", result=clean_result, duration=duration)
+            send_telegram_notification(task_id=task_id, task_title=task_title, status="completed", result=clean_result, duration=duration)
 
         except asyncio.CancelledError:
             duration = (datetime.now() - task_start).total_seconds()
