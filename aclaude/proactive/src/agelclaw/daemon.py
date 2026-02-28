@@ -201,6 +201,22 @@ def send_telegram_notification(task_id: int, task_title: str, status: str, resul
                     except Exception:
                         pass
         log.info(f"Telegram notification sent for task #{task_id}")
+
+        # Log to shared_chat so the chat agent has context about completed tasks
+        if status in ("completed", "failed"):
+            try:
+                dur_info = f" ({duration:.0f}s)" if duration else ""
+                if status == "completed":
+                    chat_log = f"[Task #{task_id} completed{dur_info}] {task_title}: {result_clean[:500]}"
+                else:
+                    chat_log = f"[Task #{task_id} failed{dur_info}] {task_title}: {result_clean[:300]}"
+                memory.log_conversation(
+                    role="assistant",
+                    content=chat_log,
+                    session_id="shared_chat",
+                )
+            except Exception:
+                pass
     except Exception as e:
         log.warning(f"Failed to send Telegram notification for task #{task_id}: {e}")
 
