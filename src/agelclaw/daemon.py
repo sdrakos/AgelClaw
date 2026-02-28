@@ -62,7 +62,7 @@ API_PORT = _cfg.get("daemon_port", 8420)
 WEBHOOK_URL = os.getenv("AGENT_WEBHOOK_URL", "")  # POST cycle summaries here
 
 _router = AgentRouter()
-from agelclaw.project import get_project_dir, get_log_dir, get_skills_dir
+from agelclaw.project import get_project_dir, get_log_dir, get_skills_dir, get_persona_dir
 LOG_DIR = get_log_dir()
 
 logging.basicConfig(
@@ -129,13 +129,33 @@ def send_telegram_notification(task_id: int, task_title: str, status: str, resul
             icon = "\u274c"
         dur_str = f" ({duration:.0f}\u03b4\u03b5\u03c5\u03c4.)" if duration else ""
         # Build human-friendly message - just the result, no technical details
-        result_clean = result[:400] if result else ""
+        result_clean = result or ""
         # Remove technical prefixes the agent might have added
         for prefix in ("Successfully ", "Completed: ", "Done: ", "Result: "):
             if result_clean.startswith(prefix):
                 result_clean = result_clean[len(prefix):]
                 break
-        text = f"{icon} *{task_title}*{dur_str}\n\n{result_clean}"
+        header = f"{icon} *{task_title}*{dur_str}\n\n"
+
+        # Split long results into multiple Telegram messages (4096 char limit)
+        max_result_len = 4096 - len(header) - 50  # safety margin
+        chunks = []
+        remaining = result_clean
+        while remaining:
+            if len(remaining) <= max_result_len:
+                chunks.append(remaining)
+                break
+            # Try to split at newline
+            split_pos = remaining.rfind("\n", 0, max_result_len)
+            if split_pos == -1 or split_pos < max_result_len // 2:
+                split_pos = remaining.rfind(" ", 0, max_result_len)
+            if split_pos == -1 or split_pos < max_result_len // 2:
+                split_pos = max_result_len
+            chunks.append(remaining[:split_pos])
+            remaining = remaining[split_pos:].lstrip("\n")
+
+        if not chunks:
+            chunks = [""]
 
         import urllib.request
         import json as _json
@@ -143,33 +163,35 @@ def send_telegram_notification(task_id: int, task_title: str, status: str, resul
             uid = uid.strip()
             if not uid:
                 continue
-            payload = _json.dumps({
-                "chat_id": int(uid),
-                "text": text,
-                "parse_mode": "Markdown",
-            }).encode("utf-8")
-            req = urllib.request.Request(
-                f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                data=payload,
-                headers={"Content-Type": "application/json"},
-            )
-            try:
-                urllib.request.urlopen(req, timeout=10)
-            except Exception as te:
-                # Retry without Markdown if parsing fails
+            for i, chunk in enumerate(chunks):
+                text = f"{header}{chunk}" if i == 0 else chunk
                 payload = _json.dumps({
                     "chat_id": int(uid),
-                    "text": text.replace("**", ""),
+                    "text": text,
+                    "parse_mode": "Markdown",
                 }).encode("utf-8")
-                req2 = urllib.request.Request(
+                req = urllib.request.Request(
                     f"https://api.telegram.org/bot{bot_token}/sendMessage",
                     data=payload,
                     headers={"Content-Type": "application/json"},
                 )
                 try:
-                    urllib.request.urlopen(req2, timeout=10)
-                except Exception:
-                    pass
+                    urllib.request.urlopen(req, timeout=10)
+                except Exception as te:
+                    # Retry without Markdown if parsing fails
+                    payload = _json.dumps({
+                        "chat_id": int(uid),
+                        "text": text.replace("*", ""),
+                    }).encode("utf-8")
+                    req2 = urllib.request.Request(
+                        f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                        data=payload,
+                        headers={"Content-Type": "application/json"},
+                    )
+                    try:
+                        urllib.request.urlopen(req2, timeout=10)
+                    except Exception:
+                        pass
         log.info(f"Telegram notification sent for task #{task_id}")
     except Exception as e:
         log.warning(f"Failed to send Telegram notification for task #{task_id}: {e}")
@@ -1005,6 +1027,119 @@ async def run_agent_cycle(reason: str = "scheduled"):
 
 
 # ─────────────────────────────────────────────────────────
+# Heartbeat Proactivity
+# ─────────────────────────────────────────────────────────
+
+async def _maybe_run_heartbeat():
+    """Check if it's time for a heartbeat and execute if so.
+
+    Heartbeat reviews recent activity and proactively reaches out via Telegram
+    if there's something worth telling the user. Controlled by config:
+        heartbeat_enabled: true/false
+        heartbeat_interval_hours: 4  (default)
+        heartbeat_quiet_start: 23   (default, hour 0-23)
+        heartbeat_quiet_end: 8      (default, hour 0-23)
+    """
+    cfg = load_config()
+    if not cfg.get("heartbeat_enabled", False):
+        return
+
+    interval_hours = cfg.get("heartbeat_interval_hours", 4)
+    quiet_start = cfg.get("heartbeat_quiet_start", 23)
+    quiet_end = cfg.get("heartbeat_quiet_end", 8)
+
+    # Check quiet hours
+    current_hour = datetime.now().hour
+    if quiet_start > quiet_end:
+        # Wraps midnight: e.g. 23-8 means quiet from 23:00 to 08:00
+        if current_hour >= quiet_start or current_hour < quiet_end:
+            log.debug("Heartbeat skipped: quiet hours")
+            return
+    else:
+        if quiet_start <= current_hour < quiet_end:
+            log.debug("Heartbeat skipped: quiet hours")
+            return
+
+    # Check if enough time has passed since last heartbeat
+    last_heartbeat = memory.kv_get("last_heartbeat_at")
+    if last_heartbeat:
+        try:
+            last_dt = datetime.fromisoformat(last_heartbeat)
+            elapsed_hours = (datetime.now() - last_dt).total_seconds() / 3600
+            if elapsed_hours < interval_hours:
+                return
+        except (ValueError, TypeError):
+            pass
+
+    # Time for a heartbeat
+    log.info("HEARTBEAT: Starting proactive check")
+    memory.kv_set("last_heartbeat_at", datetime.now().isoformat())
+
+    # Load heartbeat checklist if available
+    heartbeat_checklist = ""
+    heartbeat_file = get_persona_dir() / "HEARTBEAT.md"
+    if heartbeat_file.exists():
+        try:
+            heartbeat_checklist = heartbeat_file.read_text(encoding="utf-8", errors="replace").strip()
+        except Exception:
+            pass
+
+    # Build heartbeat prompt
+    context = memory.build_context_summary()
+    heartbeat_prompt = (
+        f"HEARTBEAT CHECK — {datetime.now().isoformat()}\n\n"
+        f"You are performing a periodic proactive check. Review the current state and decide "
+        f"if there's anything worth telling the user via Telegram.\n\n"
+        f"{context}\n\n"
+    )
+    if heartbeat_checklist:
+        heartbeat_prompt += f"## Heartbeat Checklist\n{heartbeat_checklist}\n\n"
+    heartbeat_prompt += (
+        "## Instructions\n"
+        "1. Review the context above\n"
+        "2. Check pending/overdue tasks, recent completions, upcoming deadlines\n"
+        "3. If there's something actionable or noteworthy for the user:\n"
+        "   - Send a brief, helpful Telegram message using the notification system\n"
+        "   - Write in Greek, keep it concise and natural\n"
+        "4. If nothing notable: just log 'HEARTBEAT_OK' and stop\n"
+        "5. `agelclaw-mem log \"HEARTBEAT: <summary>\"`\n"
+    )
+
+    try:
+        route = _router.route(task_type="heartbeat")
+
+        if route.provider == Provider.OPENAI:
+            agent = get_agent(provider="openai", model=route.model)
+            result = await agent.run(
+                prompt=heartbeat_prompt,
+                system_prompt=_get_daemon_prompt(),
+                tools=ALLOWED_TOOLS,
+                cwd=str(proactive_dir),
+                max_turns=10,
+            )
+            log.info(f"HEARTBEAT completed (OpenAI): {(result or '')[:200]}")
+        else:
+            options = ClaudeAgentOptions(
+                system_prompt=_get_daemon_prompt(),
+                allowed_tools=AGENT_TOOLS,
+                setting_sources=["user", "project"],
+                permission_mode="bypassPermissions",
+                cwd=str(proactive_dir),
+                max_turns=10,
+            )
+            response_parts = []
+            async for message in query(prompt=heartbeat_prompt, options=options):
+                if isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        if isinstance(block, TextBlock):
+                            response_parts.append(block.text)
+            log.info(f"HEARTBEAT completed (Claude): {''.join(response_parts)[:200]}")
+
+    except Exception as e:
+        log.error(f"HEARTBEAT failed: {e}", exc_info=True)
+
+
+# ─────────────────────────────────────────────────────────
 # Background scheduler
 # ─────────────────────────────────────────────────────────
 
@@ -1047,6 +1182,12 @@ async def scheduler_loop():
             await run_agent_cycle(reason=reason)
         except Exception as e:
             log.error(f"Cycle crashed: {e}", exc_info=True)
+
+        # Heartbeat: proactive check after each cycle
+        try:
+            await _maybe_run_heartbeat()
+        except Exception as e:
+            log.error(f"Heartbeat check failed: {e}", exc_info=True)
 
 
 # ─────────────────────────────────────────────────────────

@@ -130,6 +130,13 @@ def get_reports_dir() -> Path:
     return d
 
 
+def get_persona_dir() -> Path:
+    """Path to persona directory (SOUL.md, IDENTITY.md, etc.)."""
+    d = get_project_dir() / "persona"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 # ── Project initialization ────────────────────────────────────
 
 def init_project(path: Path | str | None = None) -> Path:
@@ -187,5 +194,14 @@ def init_project(path: Path | str | None = None) -> Path:
                 skill_dst = skills_dir / skill_src.name
                 if not skill_dst.exists():
                     shutil.copytree(skill_src, skill_dst)
+
+    # Copy persona templates (SOUL.md, IDENTITY.md, BOOTSTRAP.md, HEARTBEAT.md)
+    persona_dir = project / "persona"
+    persona_dir.mkdir(parents=True, exist_ok=True)
+    for persona_file in ("SOUL.md", "IDENTITY.md", "BOOTSTRAP.md", "HEARTBEAT.md"):
+        src = templates / persona_file
+        dst = persona_dir / persona_file
+        if src.exists() and not dst.exists():
+            shutil.copy2(src, dst)
 
     return project

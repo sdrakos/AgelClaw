@@ -109,6 +109,7 @@ agelclaw web / agelclaw telegram / agelclaw
 daemon (:8420) — Parallel Execution
   ├── scheduler_loop(): sleeps until next due task or CHECK_INTERVAL
   ├── run_agent_cycle(): gathers due + pending tasks
+  ├── _maybe_run_heartbeat(): proactive check after each cycle (if enabled)
   ├── execute_single_task() / execute_subagent_task()  — parallel via asyncio.gather
   ├── Semaphore limits concurrency (max_concurrent_tasks)
   ├── POST /task → add + wake daemon
@@ -157,7 +158,14 @@ proactive/src/agelclaw/           # Python package (pip install)
 └── data/                         # Bundled package data (immutable)
     ├── react_dist/               # Pre-built React chat UI
     ├── skills/                   # 14 bundled skills (pdf, xlsx, pptx, email, skill-creator, etc.)
-    └── templates/                # config.yaml.example, .env.example, ecosystem.config.js
+    └── templates/                # Config + persona templates copied on init
+        ├── config.yaml.example
+        ├── .env.example
+        ├── ecosystem.config.js
+        ├── SOUL.md               # Persona: core values & behavior rules
+        ├── IDENTITY.md           # Persona: agent name, vibe, user info
+        ├── BOOTSTRAP.md          # Persona: first-run onboarding (self-deleting)
+        └── HEARTBEAT.md          # Persona: heartbeat checklist
 ```
 
 ### Project Directory (mutable user data)
@@ -171,6 +179,11 @@ proactive/src/agelclaw/           # Python package (pip install)
 ├── logs/daemon.log               # Daemon execution logs
 ├── tasks/task_<id>/              # Per-task output folders (task_info.json, result.md, artifacts)
 ├── subagents/<name>/SUBAGENT.md  # Subagent definitions (YAML frontmatter + instructions)
+├── persona/                      # Agent personality & onboarding
+│   ├── SOUL.md                   # Core values, behavior rules, communication style
+│   ├── IDENTITY.md               # Agent name, vibe, user info
+│   ├── BOOTSTRAP.md              # First-run onboarding (auto-deleted after completion)
+│   └── HEARTBEAT.md              # User-editable heartbeat checklist
 ├── reports/                      # Generated reports
 ├── uploads/                      # Uploaded files
 └── .Claude/Skills/               # Project-specific skills (copied from bundled on init)
@@ -198,6 +211,14 @@ proactive/src/agelclaw/           # Python package (pip install)
 
 **Subagent system.** Defined in `subagents/<name>/SUBAGENT.md` (YAML frontmatter: provider, task_type, tools). Daemon routes assigned tasks to `execute_subagent_task()` which uses `AgentDefinition` (Claude) or custom system prompt (OpenAI).
 
+**Persona files.** `persona/SOUL.md` (values & behavior) and `persona/IDENTITY.md` (name, vibe, user info) are loaded at the top of every system prompt via `_load_persona_files()`. `persona/BOOTSTRAP.md` triggers first-run onboarding — the agent guides the user through setup, updates the profile and IDENTITY.md, then deletes BOOTSTRAP.md. All files are user-editable. Changes take effect within 120s (prompt cache TTL).
+
+**Heartbeat proactivity.** Daemon runs `_maybe_run_heartbeat()` after each scheduler cycle. Controlled by `heartbeat_enabled`, `heartbeat_interval_hours`, `heartbeat_quiet_start/end` in config.yaml. Reads `persona/HEARTBEAT.md` for a user-editable checklist. State tracked via `kv_store` key `last_heartbeat_at`. Sends Telegram messages only when there's something actionable.
+
+**Memory context isolation.** Conversations log `channel_type` ("web", "private", "group") and `chat_id`. In group Telegram chats (`chat_type` = "group"/"supergroup"), the system: (1) skips persona files from the prompt, (2) excludes user profile from context, (3) uses separate "group_chat" session instead of "shared_chat", (4) doesn't recall private conversation history. This prevents leaking personal data in group contexts.
+
+**Telegram allowlist.** `telegram_allowed_users` in config.yaml — comma-separated user IDs. Empty = allow all. Checked by `is_authorized()` in `telegram_bot.py`.
+
 ## Configuration (config.yaml)
 
 ```yaml
@@ -210,7 +231,11 @@ cost_limit_daily: 10.00
 max_concurrent_tasks: 3
 check_interval: 300               # Seconds between daemon cycles
 telegram_bot_token: ""
-telegram_allowed_users: ""
+telegram_allowed_users: ""        # Comma-separated Telegram user IDs (empty = allow all)
+heartbeat_enabled: false          # Periodic proactive check-in via Telegram
+heartbeat_interval_hours: 4
+heartbeat_quiet_start: 23         # Don't heartbeat 23:00-08:00
+heartbeat_quiet_end: 8
 outlook_client_id: ""
 outlook_client_secret: ""
 outlook_tenant_id: ""

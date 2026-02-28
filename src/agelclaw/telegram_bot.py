@@ -41,7 +41,8 @@ from claude_agent_sdk import (
     ToolUseBlock,
 )
 from agelclaw.agent_config import (
-    get_system_prompt, build_agent_options, build_prompt_with_history,
+    get_system_prompt, get_system_prompt_for_channel, build_agent_options,
+    build_prompt_with_history,
     SHARED_SESSION_ID, get_agent, get_router, AGENT_TOOLS, PROACTIVE_DIR,
 )
 from agelclaw.core.config import load_config
@@ -208,19 +209,19 @@ def _get_uploads_dir() -> Path:
     return d
 
 
-async def run_agent_query_with_progress(prompt: str, chat) -> str:
+async def run_agent_query_with_progress(prompt: str, chat, channel_type: str = "private") -> str:
     """Run the agent query with live progress updates to Telegram.
     Routes to Claude or OpenAI based on config."""
     router = get_router()
     route = router.route(task_type="chat")
 
     if route.provider == Provider.OPENAI:
-        return await _run_openai_query(prompt, chat, route.model)
+        return await _run_openai_query(prompt, chat, route.model, channel_type)
     else:
-        return await _run_claude_query(prompt, chat)
+        return await _run_claude_query(prompt, chat, channel_type)
 
 
-async def _run_openai_query(prompt: str, chat, model: str) -> str:
+async def _run_openai_query(prompt: str, chat, model: str, channel_type: str = "private") -> str:
     """Run query via OpenAI Agents SDK (no streaming progress)."""
     progress_msg = None
     try:
@@ -230,7 +231,7 @@ async def _run_openai_query(prompt: str, chat, model: str) -> str:
         agent = get_agent(provider="openai", model=model)
         result = await agent.run(
             prompt=prompt,
-            system_prompt=get_system_prompt(),
+            system_prompt=get_system_prompt_for_channel(channel_type),
             tools=AGENT_TOOLS,
             cwd=str(PROACTIVE_DIR),
             max_turns=30,
@@ -254,9 +255,9 @@ async def _run_openai_query(prompt: str, chat, model: str) -> str:
         return f"Error: {e}"
 
 
-async def _run_claude_query(prompt: str, chat) -> str:
+async def _run_claude_query(prompt: str, chat, channel_type: str = "private") -> str:
     """Run query via Claude Agent SDK with streaming progress."""
-    options = build_agent_options(max_turns=30)
+    options = build_agent_options(max_turns=30, channel_type=channel_type)
     full_response = []
     progress_msg = None
     last_status = ""
@@ -521,6 +522,11 @@ async def handle_message(update: Update, context) -> None:
     user_name = update.effective_user.first_name or "User"
     logger.info(f"Message from {user_name} ({update.effective_user.id}): {user_text[:100]}")
 
+    # Determine channel type for context isolation
+    chat_type = update.message.chat.type  # "private", "group", "supergroup", "channel"
+    channel_type = "group" if chat_type in ("group", "supergroup") else "private"
+    chat_id = str(update.message.chat.id)
+
     # ── Check for stop intent (e.g. "σταμάτα το task 5", "cancel 12")
     stop_id = _detect_stop_intent(user_text)
     if stop_id is not None:
@@ -553,14 +559,19 @@ async def handle_message(update: Update, context) -> None:
     await update.message.chat.send_action(ChatAction.TYPING)
 
     # Build prompt with conversation history from SQLite (shared across all channels)
-    prompt_with_context = build_prompt_with_history(user_text, memory)
+    # In group mode: restricted context (no profile, no private conversations)
+    prompt_with_context = build_prompt_with_history(user_text, memory, channel_type=channel_type)
 
     # Run the agent query with live progress updates
-    response = await run_agent_query_with_progress(prompt_with_context, update.message.chat)
+    response = await run_agent_query_with_progress(prompt_with_context, update.message.chat, channel_type=channel_type)
 
     # Log to memory (log original user text, not the context-enriched prompt)
-    memory.log_conversation(role="user", content=user_text[:2000], session_id=SHARED_SESSION_ID)
-    memory.log_conversation(role="assistant", content=response[:2000], session_id=SHARED_SESSION_ID)
+    # Group messages go to "group_chat" session, private to "shared_chat"
+    session_id = "group_chat" if channel_type == "group" else SHARED_SESSION_ID
+    memory.log_conversation(role="user", content=user_text[:2000], session_id=session_id,
+                            channel_type=channel_type, chat_id=chat_id)
+    memory.log_conversation(role="assistant", content=response[:2000], session_id=session_id,
+                            channel_type=channel_type, chat_id=chat_id)
 
     # Send response (split if too long)
     chunks = split_message(response)

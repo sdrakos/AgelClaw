@@ -52,7 +52,9 @@ Per-subagent task commands:
 Subagent commands:
   subagents                         - List installed subagent definitions
   subagent_content <name>           - Get full SUBAGENT.md content
-  create_subagent <name> <desc> <body> - Create persistent subagent definition
+  create_subagent <name> <desc> <body> [provider] [task_type] [tools_csv]
+  add_subagent_script <name> <file> <code>  - Add script to subagent
+  add_subagent_ref <name> <file> <content>  - Add reference to subagent
 
 Task folder commands:
   task_folder <id>                  - Get/create task folder path
@@ -512,15 +514,63 @@ def main():
         name = sys.argv[2]
         desc = sys.argv[3]
         body = sys.argv[4]
+        provider = sys.argv[5] if len(sys.argv) > 5 else "auto"
+        task_type = sys.argv[6] if len(sys.argv) > 6 else "general"
+        tools_csv = sys.argv[7] if len(sys.argv) > 7 else ""
         subagents_root = get_subagents_dir()
         sub_dir = subagents_root / name
         sub_dir.mkdir(parents=True, exist_ok=True)
         (sub_dir / "scripts").mkdir(exist_ok=True)
+        (sub_dir / "references").mkdir(exist_ok=True)
         sub_md = sub_dir / "SUBAGENT.md"
         # Build SUBAGENT.md with frontmatter
-        content = f"---\nname: {name}\ndescription: >-\n  {desc}\nprovider: auto\ntask_type: general\n---\n\n{body}"
+        fm_lines = [
+            "---",
+            f"name: {name}",
+            f"description: >-",
+            f"  {desc}",
+            f"provider: {provider}",
+            f"task_type: {task_type}",
+        ]
+        if tools_csv:
+            tools_list = [t.strip() for t in tools_csv.split(",") if t.strip()]
+            fm_lines.append("tools:")
+            for t in tools_list:
+                fm_lines.append(f"  - {t}")
+        fm_lines.append("---")
+        content = "\n".join(fm_lines) + f"\n\n{body}"
         sub_md.write_text(content, encoding="utf-8")
         print(f"Subagent '{name}' created at {sub_dir}")
+
+    elif cmd == "add_subagent_script":
+        # add_subagent_script <name> <filename> "<code>"
+        if len(sys.argv) < 5:
+            print("Usage: agelclaw-mem add_subagent_script <name> <filename> \"<code>\"")
+            sys.exit(1)
+        name = sys.argv[2]
+        filename = sys.argv[3]
+        code = sys.argv[4]
+        subagents_root = get_subagents_dir()
+        scripts_dir = subagents_root / name / "scripts"
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+        script_path = scripts_dir / filename
+        script_path.write_text(code, encoding="utf-8")
+        print(f"Script '{filename}' added to subagent '{name}' at {script_path}")
+
+    elif cmd == "add_subagent_ref":
+        # add_subagent_ref <name> <filename> "<content>"
+        if len(sys.argv) < 5:
+            print("Usage: agelclaw-mem add_subagent_ref <name> <filename> \"<content>\"")
+            sys.exit(1)
+        name = sys.argv[2]
+        filename = sys.argv[3]
+        ref_content = sys.argv[4]
+        subagents_root = get_subagents_dir()
+        refs_dir = subagents_root / name / "references"
+        refs_dir.mkdir(parents=True, exist_ok=True)
+        ref_path = refs_dir / filename
+        ref_path.write_text(ref_content, encoding="utf-8")
+        print(f"Reference '{filename}' added to subagent '{name}' at {ref_path}")
 
     # ── Embedding / Semantic search commands ─────────────────
 

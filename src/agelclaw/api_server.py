@@ -438,11 +438,13 @@ async def chat(req: ChatRequest):
                     elif isinstance(message, ResultMessage):
                         pass
 
-            memory.log_conversation(role="user", content=req.message[:2000], session_id="shared_chat")
+            memory.log_conversation(role="user", content=req.message[:2000], session_id="shared_chat",
+                                    channel_type="web")
             memory.log_conversation(
                 role="assistant",
                 content="".join(full_response)[:2000],
                 session_id="shared_chat",
+                channel_type="web",
             )
 
         except Exception as e:
@@ -532,11 +534,13 @@ async def upload_file(
                 role="user",
                 content=f"[File: {file.filename}] {message}"[:2000],
                 session_id="shared_chat",
+                channel_type="web",
             )
             memory.log_conversation(
                 role="assistant",
                 content="".join(full_response)[:2000],
                 session_id="shared_chat",
+                channel_type="web",
             )
 
         except Exception as e:

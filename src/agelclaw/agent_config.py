@@ -15,7 +15,7 @@ from claude_agent_sdk import ClaudeAgentOptions
 from agelclaw.core.config import load_config
 from agelclaw.core.agent_router import AgentRouter, Provider
 
-from agelclaw.project import get_project_dir, get_db_path, get_skills_dir, get_subagents_dir
+from agelclaw.project import get_project_dir, get_db_path, get_skills_dir, get_subagents_dir, get_persona_dir
 
 PROACTIVE_DIR = get_project_dir()
 SHARED_SESSION_ID = "shared_chat"
@@ -91,7 +91,9 @@ Use `agelclaw-mem <command>` via Bash for ALL memory and skill operations:
 ### Subagent definition commands:
   agelclaw-mem subagents                        # List installed subagent definitions
   agelclaw-mem subagent_content <name>          # Get full SUBAGENT.md content
-  agelclaw-mem create_subagent <name> "<desc>" "<body>"
+  agelclaw-mem create_subagent <name> "<desc>" "<body>" [provider] [task_type] [tools_csv]
+  agelclaw-mem add_subagent_script <name> <file> "<code>"   # Add script to subagent
+  agelclaw-mem add_subagent_ref <name> <file> "<content>"   # Add reference to subagent
 
 ### Task folder commands:
   agelclaw-mem task_folder <id>                 # Get/create task folder path
@@ -106,6 +108,28 @@ Use `agelclaw-mem <command>` via Bash for ALL memory and skill operations:
   agelclaw-mem profile [category]                         # View profile
   agelclaw-mem set_profile <cat> <key> "<value>" [conf] [source]
   agelclaw-mem del_profile <cat> <key>
+
+## SUBAGENT DELEGATION (CRITICAL — READ THIS FIRST)
+Before executing ANY non-trivial work (API calls, scripts, email, reports, file generation):
+1. Check if a matching subagent exists (you can see the subagent catalog in your prompt)
+2. If a subagent matches the task → DELEGATE. Do NOT execute inline.
+   ```
+   agelclaw-mem add_subagent_task <subagent_name> "<title>" "<description>" 3
+   curl -s -X POST http://localhost:8420/wake
+   ```
+3. Tell the user: "Ανέθεσα στον subagent '<name>' — Task #N. Θα λάβεις ειδοποίηση."
+4. DONE. Move on. Do NOT wait for the subagent to finish.
+
+Examples of DELEGATION (correct):
+- User: "στείλε μου τη Διαύγεια" → `add_subagent_task diaugeia "Αναφορά Διαύγειας" "..."` ✅
+- User: "τρέξε test Διαύγειας" → `add_subagent_task diaugeia "Test run" "... --excel χωρίς email"` ✅
+- User: "φέρε αποφάσεις Ρόδου" → `add_subagent_task diaugeia "Αποφάσεις Ρόδου" "... --org ΡΟΔΟΥ"` ✅
+
+Examples of INLINE (wrong):
+- User: "στείλε μου τη Διαύγεια" → running python tender_monitor.py yourself ❌ FORBIDDEN
+- User: "τρέξε test" → executing scripts in the chat session ❌ FORBIDDEN
+
+ONLY do work inline if: (a) no subagent matches, AND (b) the task takes < 30 seconds (simple questions, quick lookups, file reads).
 
 ## TASK MANAGEMENT
 - Create tasks for background/scheduled work: `agelclaw-mem add_task "<title>" "<desc>" [pri] [due_at] [recurring]`
@@ -127,24 +151,41 @@ When user asks "what's running", "τι τρέχει" → use running_tasks
 ## SUBAGENT CREATION — MANDATORY RULES
 When the user asks to "create a subagent", "δημιούργησε subagent", "φτιάξε subagent", or mentions specialized/parallel agent execution, you MUST follow ALL these steps IN ORDER:
 
+**FIRST**: Run `agelclaw-mem find_skill "subagent"` to load the subagent-creator skill guide.
+
 1. **Create the subagent definition** (SUBAGENT.md with specialized prompt):
    ```
-   agelclaw-mem create_subagent <name> "<description>" "<detailed specialist prompt>"
+   agelclaw-mem create_subagent <name> "<description>" "<detailed specialist prompt>" [provider] [task_type] [tools_csv]
    ```
    The body MUST be a complete specialist prompt — NOT a placeholder. Write it as if instructing an expert.
+   - provider: auto (default), claude, openai
+   - task_type: general, code, research, email
+   - tools_csv: comma-separated tool restrictions (optional, default=all)
 
-2. **Create the task ASSIGNED to the subagent** (NOT a global task):
+2. **Add scripts if the task involves API calls, data processing, or file generation**:
    ```
-   agelclaw-mem add_subagent_task <name> "<title>" "<detailed description>" [priority]
+   agelclaw-mem add_subagent_script <name> <filename> "<code>"
+   ```
+   For long scripts, use the Write tool directly to `subagents/<name>/scripts/<filename>`.
+   Scripts MUST be self-contained and tested.
+
+3. **Add references if the subagent needs configuration data** (org IDs, API docs, templates):
+   ```
+   agelclaw-mem add_subagent_ref <name> <filename> "<content>"
+   ```
+
+4. **Create the task ASSIGNED to the subagent** (NOT a global task):
+   ```
+   agelclaw-mem add_subagent_task <name> "<title>" "<detailed description>" [priority] [due_at] [recurring]
    ```
    This creates a task with `assigned_to=<name>`, so the daemon routes it to the subagent.
 
-3. **Wake the daemon**:
+5. **Wake the daemon**:
    ```
    curl -s -X POST http://localhost:8420/wake
    ```
 
-4. **Tell the user**: "Δημιουργήθηκε ο subagent '<name>' με task #N — ο daemon θα το εκτελέσει."
+6. **Tell the user**: "Δημιουργήθηκε ο subagent '<name>' με task #N — ο daemon θα το εκτελέσει."
 
 VIOLATION: Creating a regular `add_task` when the user asked for a subagent is FORBIDDEN.
 VIOLATION: Creating a subagent definition WITHOUT an assigned task is FORBIDDEN.
@@ -186,12 +227,23 @@ Categories: identity, work, preferences, relationships, habits, interests
 - Only call mem_cli.py when you need to CREATE/UPDATE/SEARCH something, not to READ context you already have.
 - If the user asks "τι tasks έχω;" THEN check tasks. If the user says "γεια σου" just respond.
 
+## CONFIRMATION = EXECUTE (CRITICAL)
+When the user says "ναι", "yes", "nai", "go", "ok", "κάνε το", "τρέξτο", "προχώρα", "sure", "do it":
+→ This means EXECUTE THE ACTION you just proposed. IMMEDIATELY.
+→ Do NOT describe the action again.
+→ Do NOT ask for confirmation again.
+→ Do NOT summarize what you will do — just DO IT using tools.
+→ If you proposed "θέλεις να τρέξω test;" and user says "ναι" → RUN the test command NOW.
+→ If you proposed "να στείλω email;" and user says "ναι" → SEND the email NOW.
+VIOLATION: Responding to "ναι" with another description instead of executing is FORBIDDEN.
+
 ## CRITICAL RULES (MUST FOLLOW)
 - Respond in the same language the user uses
 - Be concise and helpful
 - NEVER say "you can run this command" — RUN IT YOURSELF or delegate to daemon
 - You MUST use the bash tool to run `agelclaw-mem` commands when you need to CREATE/UPDATE data — DO NOT guess or assume
 - NEVER claim something doesn't exist without checking first via bash
+- When you offer to do something and the user agrees → ACT, don't talk
 """
 
 
@@ -372,8 +424,51 @@ _prompt_cache = {"text": None, "ts": 0}
 _PROMPT_CACHE_TTL = 120  # seconds — rebuild every 2 min
 
 
+def _load_persona_files() -> str:
+    """Load persona/SOUL.md and persona/IDENTITY.md content for system prompt injection.
+    Returns empty string if files don't exist."""
+    persona_dir = get_persona_dir()
+    parts = []
+
+    for filename in ("SOUL.md", "IDENTITY.md"):
+        filepath = persona_dir / filename
+        if filepath.exists():
+            try:
+                content = filepath.read_text(encoding="utf-8", errors="replace").strip()
+                if content:
+                    parts.append(content)
+            except Exception:
+                pass
+
+    if not parts:
+        return ""
+    return "\n\n".join(parts) + "\n\n---\n\n"
+
+
+def _check_bootstrap() -> str:
+    """Check if persona/BOOTSTRAP.md exists (first-run onboarding).
+    If it does, return its content with instructions to complete onboarding."""
+    persona_dir = get_persona_dir()
+    bootstrap = persona_dir / "BOOTSTRAP.md"
+    if not bootstrap.exists():
+        return ""
+
+    try:
+        content = bootstrap.read_text(encoding="utf-8", errors="replace").strip()
+        if not content:
+            return ""
+        return (
+            "\n\n## ONBOARDING MODE (FIRST RUN)\n"
+            "The file persona/BOOTSTRAP.md exists, which means this is the first conversation.\n"
+            "Follow the onboarding instructions below. After completing onboarding, DELETE persona/BOOTSTRAP.md.\n\n"
+            f"{content}\n\n---\n\n"
+        )
+    except Exception:
+        return ""
+
+
 def get_system_prompt() -> str:
-    """Build the full system prompt with dynamically scanned skills, subagents, and hard rules.
+    """Build the full system prompt with persona, skills, subagents, and hard rules.
     Cached for 120s to avoid filesystem scanning on every message."""
     now = _time.time()
     if _prompt_cache["text"] and (now - _prompt_cache["ts"]) < _PROMPT_CACHE_TTL:
@@ -381,7 +476,14 @@ def get_system_prompt() -> str:
 
     from agelclaw.memory import Memory
     mem = Memory()
-    result = _SYSTEM_PROMPT_BASE + _scan_installed_skills() + _scan_installed_subagents() + mem.build_rules_prompt()
+    result = (
+        _load_persona_files()
+        + _check_bootstrap()
+        + _SYSTEM_PROMPT_BASE
+        + _scan_installed_skills()
+        + _scan_installed_subagents()
+        + mem.build_rules_prompt()
+    )
     _prompt_cache["text"] = result
     _prompt_cache["ts"] = now
     return result
@@ -392,19 +494,29 @@ def get_system_prompt() -> str:
 SYSTEM_PROMPT = get_system_prompt()
 
 
-def build_prompt_with_history(user_text: str, memory) -> str:
+def build_prompt_with_history(user_text: str, memory, channel_type: str = "private") -> str:
     """Build prompt with recent conversation history + fast keyword recall.
 
     Shared between api_server.py and telegram_bot.py so both channels
     see the same unified conversation memory.
+
+    Args:
+        user_text: The user's message.
+        memory: Memory instance.
+        channel_type: "private", "web", "group", or "daemon".
+            - "private"/"web"/"daemon": full context (profile, persona, conversations)
+            - "group": no profile, no private conversations, only group-relevant history
 
     Performance: uses only SQLite queries (no external API calls).
     Semantic search is available on-demand via `agelclaw-mem search "..."`.
     """
     session_id = SHARED_SESSION_ID
 
-    # Recent messages (last 10 pairs = 20 messages) — instant SQLite query
-    recent = memory.get_conversation_history(session_id=session_id, limit=20)
+    # In group mode, only show group conversations, not private ones
+    if channel_type == "group":
+        recent = memory.get_conversation_history(session_id="group_chat", limit=20)
+    else:
+        recent = memory.get_conversation_history(session_id=session_id, limit=20)
 
     if not recent:
         return user_text
@@ -414,7 +526,7 @@ def build_prompt_with_history(user_text: str, memory) -> str:
 
     context_parts = []
 
-    if relevant_older:
+    if relevant_older and channel_type != "group":
         context_parts.append("=== Relevant earlier conversation ===")
         for msg in relevant_older:
             prefix = "User" if msg["role"] == "user" else "Assistant"
@@ -427,8 +539,8 @@ def build_prompt_with_history(user_text: str, memory) -> str:
     for msg in recent:
         prefix = "User" if msg["role"] == "user" else "Assistant"
         content = msg["content"]
-        if msg["role"] == "assistant" and len(content) > 500:
-            content = content[:500] + "..."
+        if msg["role"] == "assistant" and len(content) > 1500:
+            content = content[:1500] + "..."
         context_parts.append(f"{prefix}: {content}")
 
     context_parts.append(f"\nUser (latest): {user_text}")
@@ -440,7 +552,8 @@ def build_prompt_with_history(user_text: str, memory) -> str:
         + "\n\nREMINDER: You have ALL tools available (Read, Write, Edit, Bash, Grep, Glob, WebSearch, WebFetch). "
         + "Use `agelclaw-mem` via Bash for memory/skill/task operations. "
         + "For deeper memory recall, run `agelclaw-mem search \"query\"` (semantic search). "
-        + "Execute work directly — don't just delegate unless it's a background/scheduled task."
+        + "If a subagent exists for this type of work, DELEGATE via add_subagent_task — do NOT run scripts inline. "
+        + "If the user says 'ναι'/'yes'/'nai' to something you proposed — EXECUTE IT NOW using tools, do not describe it again."
     )
 
 
@@ -488,10 +601,29 @@ def _find_relevant_history_fast(user_text: str, session_id: str, recent_msgs: li
         return []
 
 
-def build_agent_options(max_turns: int = 30) -> ClaudeAgentOptions:
+def get_system_prompt_for_channel(channel_type: str = "private") -> str:
+    """Build system prompt appropriate for the channel type.
+
+    In group mode: skip persona files and user profile to avoid leaking private data.
+    In private/web/daemon mode: full system prompt with persona.
+    """
+    if channel_type == "group":
+        # Group mode: base prompt + skills + subagents + rules, but NO persona files
+        from agelclaw.memory import Memory
+        mem = Memory()
+        return (
+            _SYSTEM_PROMPT_BASE
+            + _scan_installed_skills()
+            + _scan_installed_subagents()
+            + mem.build_rules_prompt()
+        )
+    return get_system_prompt()
+
+
+def build_agent_options(max_turns: int = 30, channel_type: str = "private") -> ClaudeAgentOptions:
     """Build ClaudeAgentOptions for chat/telegram agents (full tool set)."""
     return ClaudeAgentOptions(
-        system_prompt=get_system_prompt(),
+        system_prompt=get_system_prompt_for_channel(channel_type),
         allowed_tools=AGENT_TOOLS,
         setting_sources=["user", "project"],
         permission_mode="bypassPermissions",

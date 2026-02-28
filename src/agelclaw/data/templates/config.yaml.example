@@ -15,6 +15,12 @@ cost_limit_daily: 10.00
 max_concurrent_tasks: 3
 check_interval: 300
 
+# Heartbeat proactivity (optional — periodic check-in via Telegram)
+heartbeat_enabled: false
+heartbeat_interval_hours: 4
+heartbeat_quiet_start: 23       # Don't send heartbeats between 23:00-08:00
+heartbeat_quiet_end: 8
+
 # Outlook / Microsoft Graph API (optional — for email digest feature)
 outlook_client_id: ""
 outlook_client_secret: ""

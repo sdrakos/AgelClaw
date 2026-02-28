@@ -37,6 +37,9 @@ build/
 *.egg-info/
 src/agelclaw/__pycache__/
 
+# Local dev runner (not part of package)
+src/agelclaw/agent_run.py
+
 # Subagents (user data)
 subagents/
 

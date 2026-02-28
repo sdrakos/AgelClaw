@@ -165,6 +165,16 @@ class Memory:
                 pass  # Already exists
             conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_assigned ON tasks(assigned_to, status)")
 
+            # Migration: add channel_type and chat_id columns to conversations
+            try:
+                conn.execute("ALTER TABLE conversations ADD COLUMN channel_type TEXT DEFAULT 'web'")
+            except sqlite3.OperationalError:
+                pass  # Already exists
+            try:
+                conn.execute("ALTER TABLE conversations ADD COLUMN chat_id TEXT")
+            except sqlite3.OperationalError:
+                pass  # Already exists
+
     # ─────────────────────────────────────────
     # Embeddings (lazy init)
     # ─────────────────────────────────────────
@@ -504,13 +514,15 @@ class Memory:
         session_id: str = None,
         tokens_used: int = 0,
         cost: float = 0,
+        channel_type: str = "web",
+        chat_id: str = None,
     ) -> int:
         with self._conn() as conn:
             cur = conn.execute(
                 """INSERT INTO conversations
-                   (role, content, task_id, session_id, tokens_used, cost)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (role, content, task_id, session_id, tokens_used, cost),
+                   (role, content, task_id, session_id, tokens_used, cost, channel_type, chat_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (role, content, task_id, session_id, tokens_used, cost, channel_type, chat_id),
             )
             conv_id = cur.lastrowid
         self._embed_async("embed_conversation", conv_id, content)
@@ -739,10 +751,14 @@ class Memory:
     # Context builder (for agent prompt)
     # ─────────────────────────────────────────
 
-    def build_context_summary(self) -> str:
+    def build_context_summary(self, context_type: str = "private") -> str:
         """
         Build a comprehensive context summary for the agent.
         This is injected into every prompt so the agent knows its state.
+
+        Args:
+            context_type: "private"/"web" for full context, "group" for sanitized,
+                         "daemon" for full context (same as private).
         """
         stats = self.get_task_stats()
         pending = self.get_pending_tasks(limit=10)
@@ -753,12 +769,13 @@ class Memory:
 
         parts = []
 
-        # User profile (first, so agent always sees it)
-        profile = self.get_profile_summary()
-        if profile:
-            parts.append("## User Profile")
-            parts.append(profile)
-            parts.append("")
+        # User profile — skip in group mode to avoid leaking private data
+        if context_type != "group":
+            profile = self.get_profile_summary()
+            if profile:
+                parts.append("## User Profile")
+                parts.append(profile)
+                parts.append("")
 
         # Task overview
         parts.append("## Current State")
@@ -823,7 +840,11 @@ class Memory:
                 parts.append(f"- [{l['category']}] {l['insight']}")
 
         # Recent conversation history (so agent knows what was discussed)
-        conversations = self.get_conversation_history(session_id="shared_chat", limit=20)
+        # In group mode, only show group conversations (not private ones)
+        if context_type == "group":
+            conversations = self.get_conversation_history(session_id="group_chat", limit=20)
+        else:
+            conversations = self.get_conversation_history(session_id="shared_chat", limit=20)
         if conversations:
             parts.append("\n## Recent Conversations")
             for c in conversations:
