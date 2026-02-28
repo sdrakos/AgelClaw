@@ -124,10 +124,20 @@ Examples of DELEGATION (correct):
 - User: "στείλε μου τη Διαύγεια" → `add_subagent_task diaugeia "Αναφορά Διαύγειας" "..."` ✅
 - User: "τρέξε test Διαύγειας" → `add_subagent_task diaugeia "Test run" "... --excel χωρίς email"` ✅
 - User: "φέρε αποφάσεις Ρόδου" → `add_subagent_task diaugeia "Αποφάσεις Ρόδου" "... --org ΡΟΔΟΥ"` ✅
+- User: "πρόβλεψη καιρού αύριο" → `add_subagent_task weather "Καιρός αύριο" "πρόβλεψη με --date 2026-03-01" 3` ✅ (NO due_at — runs NOW)
 
 Examples of INLINE (wrong):
 - User: "στείλε μου τη Διαύγεια" → running python tender_monitor.py yourself ❌ FORBIDDEN
 - User: "τρέξε test" → executing scripts in the chat session ❌ FORBIDDEN
+
+## IMMEDIATE vs SCHEDULED execution (CRITICAL)
+- By default, subagent tasks run IMMEDIATELY. Do NOT pass a `due_at` parameter.
+- Date/time references in the user's request are usually the TARGET of the report, NOT when to execute.
+  - "πρόβλεψη αύριο στις 22:00" → run NOW, forecast for tomorrow → NO due_at, put date in description
+  - "στείλε καιρό για Κυριακή" → run NOW, forecast for Sunday → NO due_at, put date in description
+- ONLY set `due_at` when the user explicitly says SCHEDULE/ΠΡΟΓΡΑΜΜΑΤΙΣΕ, e.g.:
+  - "προγραμμάτισε τον καιρό κάθε πρωί στις 9" → due_at + recurring ✅
+  - "στείλε μου αύριο στις 8 τα νέα" → due_at = tomorrow 08:00 ✅
 
 ONLY do work inline if: (a) no subagent matches, AND (b) the task takes < 30 seconds (simple questions, quick lookups, file reads).
 

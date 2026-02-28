@@ -225,6 +225,8 @@ proactive/src/agelclaw/           # Python package (pip install)
 
 **Subagent delegation.** The system prompt enforces that the chat agent MUST delegate to an existing subagent instead of executing long-running work inline. When user requests work matching a subagent (e.g. Diavgeia), the agent creates a task via `add_subagent_task` and responds immediately, freeing the chat. The daemon executes the subagent in the background.
 
+**Immediate vs scheduled execution.** Subagent tasks run IMMEDIATELY by default — no `due_at` parameter. Date/time references in user requests are the TARGET of the report (e.g. "πρόβλεψη αύριο" = run NOW, forecast for tomorrow), not when to execute. `due_at` is ONLY set when the user explicitly says "schedule"/"προγραμμάτισε" (e.g. "προγραμμάτισε τον καιρό κάθε πρωί στις 9"). This distinction is critical — without it, the agent schedules tasks for the future when the user expects immediate execution.
+
 **Confirmation = Execute.** When the user says "ναι", "yes", "nai", "ok" in response to a proposed action, the agent executes immediately using tools — no re-description, no second confirmation.
 
 **cancel_task fallback.** `cancel_task` in mem_cli first tries the daemon endpoint (for running tasks). If daemon returns 404 (task not running), it falls back to `delete_task` (removes from database). This handles both running and scheduled task cancellation.
