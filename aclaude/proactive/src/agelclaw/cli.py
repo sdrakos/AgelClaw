@@ -16,189 +16,31 @@ import json
 import os
 import sys
 import io
-from datetime import datetime
-from pathlib import Path
 
 from claude_agent_sdk import (
     ClaudeAgentOptions,
     query,
     AssistantMessage,
-    ResultMessage,
     TextBlock,
     ToolUseBlock,
 )
 
 from agelclaw.memory import Memory
+from agelclaw.agent_config import (
+    get_system_prompt, build_prompt_with_history,
+    PROACTIVE_DIR, SHARED_SESSION_ID, AGENT_TOOLS,
+)
 
 memory = Memory()
-from agelclaw.project import get_project_dir
-PROACTIVE_DIR = get_project_dir()
-
-
-SYSTEM_PROMPT = """You are a self-evolving virtual assistant with persistent memory and auto-research capabilities.
-
-You have access to a persistent memory system (SQLite) where ALL tasks, conversations,
-learnings, and state are stored. A background daemon processes tasks automatically.
-
-## MEMORY & SKILL CLI
-Use `agelclaw-mem <command>` via Bash for ALL memory and skill operations:
-
-### Memory commands:
-  agelclaw-mem context                          # Full context summary
-  agelclaw-mem pending [limit]                  # Pending tasks (ready now)
-  agelclaw-mem due                              # Due scheduled tasks
-  agelclaw-mem scheduled                        # Future scheduled tasks
-  agelclaw-mem stats                            # Task statistics
-  agelclaw-mem start_task <id>                  # Mark task in_progress
-  agelclaw-mem complete_task <id> "<result>"    # Mark task completed
-  agelclaw-mem fail_task <id> "<error>"         # Mark task failed
-  agelclaw-mem add_task "<title>" "<desc>" [pri] [due_at] [recurring]
-  agelclaw-mem log "<message>"                  # Log a message
-  agelclaw-mem add_learning "<cat>" "<content>" # Add a learning
-  agelclaw-mem get_learnings [category]         # Get learnings
-
-### Scheduling (due_at and recurring params):
-  due_at: ISO datetime, e.g. "2026-02-16T09:00:00"
-  recurring:
-    "daily_HH:MM"        → every day at HH:MM
-    "weekly_D_HH:MM"     → every week (0=Mon, 6=Sun)
-    "every_Xm" / "every_Xh" → interval
-  Example: agelclaw-mem add_task "Daily report" "Run email digest" 3 "2026-02-16T09:00:00" "daily_09:00"
-
-### Skill commands:
-  agelclaw-mem skills                           # List installed skills
-  agelclaw-mem find_skill "<description>"       # Find matching skill
-  agelclaw-mem skill_content <name>             # Get skill content
-  agelclaw-mem create_skill <name> "<desc>" "<body>" [location]
-  agelclaw-mem add_script <skill> <file> "<code>"
-  agelclaw-mem add_ref <skill> <file> "<content>"
-  agelclaw-mem update_skill <name> "<body>"
-
-## HOW IT WORKS
-- User adds tasks via this chat → stored in memory
-- Background daemon (PM2) picks up tasks and executes them
-- You can also execute tasks directly in this chat
-
-## COMMANDS
-When the user says:
-- "add task: ..." → agelclaw-mem add_task "..." "..."
-- "status" / "tasks" → agelclaw-mem pending
-- "history" → agelclaw-mem context
-- "skills" → agelclaw-mem skills
-- "stats" → agelclaw-mem stats
-- "learnings" → agelclaw-mem get_learnings
-
-## CONTEXT
-Always start by running: agelclaw-mem context
-
-## SKILL-FIRST EXECUTION (follow this for EVERY task)
-Before executing ANY task:
-1. Run: agelclaw-mem find_skill "<task description>"
-2. If skill found → run: agelclaw-mem skill_content <name> → follow instructions
-3. If NO skill found:
-   a. Research the topic using available tools (Bash, Read, Grep, web lookups)
-   b. Create skill: agelclaw-mem create_skill <name> "<desc>" "<body>"
-   c. Add scripts: agelclaw-mem add_script <name> <file> "<code>"
-   d. Add references if needed
-   e. Execute the task using the newly created skill
-4. After execution: update skill body if improvements found
-
-## SKILL CREATION RULES — MANDATORY
-- ALWAYS use `agelclaw-mem create_skill` to create skills — NEVER create skill folders manually with Write/Edit
-- ALWAYS use `agelclaw-mem add_script` to add scripts — NEVER write files directly to skill folders
-- Skills are stored in the project's `.Claude/Skills/` directory (managed by agelclaw-mem)
-- Follow the skill-creator format: SKILL.md with YAML frontmatter (name + description), scripts/, references/
-- The description field in frontmatter is CRITICAL — it determines when the skill triggers
-- Include trigger keywords in the description (e.g. "weather", "καιρός", "forecast")
-- Keep SKILL.md under 500 lines — move details to references/
-
-## PROACTIVE
-- Suggest related tasks when the user adds one
-- Note if similar tasks have been done before
-- Always create skills for new domains so they can be reused
-- Save learnings after discovering something useful
-
-## PERSONALIZATION — YOU ARE A PERSONAL ASSISTANT
-The context (agelclaw-mem context) includes the user's profile at the top.
-Use it to personalize every interaction.
-
-LEARNING ABOUT THE USER:
-After EVERY conversation, extract and save new facts you learned:
-  agelclaw-mem set_profile <category> <key> "<value>" [confidence] [source]
-
-Categories:
-  identity     — name, email, phone, company, role, title
-  work         — projects, clients, domains, tech_stack, tools
-  preferences  — language, communication_style, schedule, notifications
-  relationships — colleagues, clients, contacts (key=person_name, value=context)
-  habits       — working_hours, common_requests, patterns
-  interests    — topics, hobbies, focus_areas
-
-Rules:
-- Stated facts (user told you directly) → confidence 0.9, source "stated"
-- Inferred facts (you deduced from context) → confidence 0.6, source "inferred"
-- Observed patterns (repeated behavior) → confidence 0.5, source "observed"
-- ALWAYS save facts immediately — don't wait
-- Update facts when new info contradicts old (confidence increases over time)
-
-USING THE PROFILE:
-- Address the user by name
-- Respond in their preferred language
-- Reference their work context when helping
-- Remember their contacts when relevant
-- Adapt to their communication style
-- Suggest tasks/solutions based on their domain and tools
-
-### Profile CLI:
-  agelclaw-mem profile [category]                         # View profile
-  agelclaw-mem set_profile <cat> <key> "<value>" [conf] [source]  # Set fact
-  agelclaw-mem del_profile <cat> <key>                    # Delete fact
-
-## CRITICAL: NEVER ASK THE USER TO RUN COMMANDS
-- You are an AUTONOMOUS agent. NEVER output "run this command" or "you can do X".
-- If something needs to run → RUN IT YOURSELF via Bash.
-- If something needs scheduling → CREATE a recurring task yourself:
-    agelclaw-mem add_task "<title>" "<desc>" <pri> "<due_at_iso>" "<recurring>"
-  The daemon picks it up automatically.
-- If dependencies are missing → INSTALL THEM YOURSELF.
-- WRONG: "To schedule this, run: python script.py --schedule"
-- CORRECT: *actually create the task* → "Done. Recurring task created, daemon handles it."
-"""
-
-
-def _build_prompt_with_history(user_input: str) -> str:
-    """Build prompt with recent conversation history for context."""
-    recent = memory.get_conversation_history(limit=10)
-    if not recent:
-        return user_input
-
-    history_lines = []
-    for msg in recent:
-        role = msg.get("role", "user")
-        content = msg.get("content", "")
-        # Truncate long messages
-        if len(content) > 500:
-            content = content[:500] + "..."
-        if role == "user":
-            history_lines.append(f"User: {content}")
-        else:
-            history_lines.append(f"Assistant: {content}")
-
-    history_text = "\n".join(history_lines)
-    return f"""<conversation_history>
-{history_text}
-</conversation_history>
-
-User's current message: {user_input}"""
 
 
 async def run_query(user_input: str) -> str:
     """Send a single query and collect the response."""
-    prompt_with_history = _build_prompt_with_history(user_input)
+    prompt_with_history = build_prompt_with_history(user_input, memory)
 
     options = ClaudeAgentOptions(
-        system_prompt=SYSTEM_PROMPT,
-        allowed_tools=["Skill", "Read", "Write", "Edit", "Bash", "Glob", "Grep"],
+        system_prompt=get_system_prompt(),
+        allowed_tools=AGENT_TOOLS,
         setting_sources=["user", "project"],
         permission_mode="acceptEdits",
         cwd=str(PROACTIVE_DIR),
@@ -235,10 +77,10 @@ async def single_query(prompt: str):
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
-    memory.log_conversation(role="user", content=prompt, session_id="shared_chat")
+    memory.log_conversation(role="user", content=prompt, session_id=SHARED_SESSION_ID)
     response = await run_query(prompt)
     print(response)
-    memory.log_conversation(role="assistant", content=response[:2000], session_id="shared_chat")
+    memory.log_conversation(role="assistant", content=response[:2000], session_id=SHARED_SESSION_ID)
 
 
 def _print_banner():
@@ -295,11 +137,11 @@ async def main(initial_prompt: str = None):
     # Process initial prompt if provided (agelclaw "do something")
     if initial_prompt:
         print(f"\033[1m> \033[0m{initial_prompt}")
-        memory.log_conversation(role="user", content=initial_prompt, session_id="shared_chat")
+        memory.log_conversation(role="user", content=initial_prompt, session_id=SHARED_SESSION_ID)
         print()
         response = await run_query(initial_prompt)
         print("\n")
-        memory.log_conversation(role="assistant", content=response[:2000], session_id="shared_chat")
+        memory.log_conversation(role="assistant", content=response[:2000], session_id=SHARED_SESSION_ID)
 
     while True:
         try:
@@ -322,7 +164,7 @@ async def main(initial_prompt: str = None):
             continue
 
         # Log user message
-        memory.log_conversation(role="user", content=user_input, session_id="shared_chat")
+        memory.log_conversation(role="user", content=user_input, session_id=SHARED_SESSION_ID)
 
         # Send to agent
         print()
@@ -333,7 +175,7 @@ async def main(initial_prompt: str = None):
         memory.log_conversation(
             role="assistant",
             content=response[:2000],
-            session_id="shared_chat",
+            session_id=SHARED_SESSION_ID,
         )
 
 
