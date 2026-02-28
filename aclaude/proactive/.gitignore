@@ -1,0 +1,54 @@
+# Secrets
+.env
+config.yaml
+
+# Data (runtime)
+data/
+!src/agelclaw/data/
+logs/
+reports/
+tasks/
+nul
+
+# Virtual environment
+.venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Node
+react-claude-chat/node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated
+*.log
+digest_*.html
+linkedin_article*.md
+sacred-texts*.md
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+src/agelclaw/__pycache__/
+
+# Local dev runner (not part of package)
+src/agelclaw/agent_run.py
+
+# Subagents (user data)
+subagents/
+
+# Buypage
+buypage/node_modules/
+buypage/dist/
+
+# IDE
+.vscode/
+
+# Ephemeral astronomy data
+de421.bsp
