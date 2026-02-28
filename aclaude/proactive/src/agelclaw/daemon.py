@@ -834,6 +834,7 @@ async def execute_subagent_task(task: dict, cycle_session: str):
             f"## STRICT RULES\n"
             f"- Execute ONLY what the task description says. Nothing more.\n"
             f"- Do NOT fix, improve, or change anything outside the task scope.\n"
+            f"- NEVER create new scripts if the subagent/skill already has one. Use the EXISTING script with its flags/parameters. If it lacks a feature, MODIFY the existing script — do NOT write a throwaway replacement.\n"
             f"- Once you call complete_task, you are DONE. STOP immediately.\n\n"
             f"## RESULT FORMAT (CRITICAL)\n"
             f"The result in complete_task is sent directly to the user as a Telegram notification.\n"
