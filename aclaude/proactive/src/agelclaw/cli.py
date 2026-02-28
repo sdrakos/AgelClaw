@@ -235,10 +235,10 @@ async def single_query(prompt: str):
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
-    memory.log_conversation(role="user", content=prompt)
+    memory.log_conversation(role="user", content=prompt, session_id="shared_chat")
     response = await run_query(prompt)
     print(response)
-    memory.log_conversation(role="assistant", content=response[:2000])
+    memory.log_conversation(role="assistant", content=response[:2000], session_id="shared_chat")
 
 
 def _print_banner():
@@ -295,11 +295,11 @@ async def main(initial_prompt: str = None):
     # Process initial prompt if provided (agelclaw "do something")
     if initial_prompt:
         print(f"\033[1m> \033[0m{initial_prompt}")
-        memory.log_conversation(role="user", content=initial_prompt)
+        memory.log_conversation(role="user", content=initial_prompt, session_id="shared_chat")
         print()
         response = await run_query(initial_prompt)
         print("\n")
-        memory.log_conversation(role="assistant", content=response[:2000])
+        memory.log_conversation(role="assistant", content=response[:2000], session_id="shared_chat")
 
     while True:
         try:
@@ -322,7 +322,7 @@ async def main(initial_prompt: str = None):
             continue
 
         # Log user message
-        memory.log_conversation(role="user", content=user_input)
+        memory.log_conversation(role="user", content=user_input, session_id="shared_chat")
 
         # Send to agent
         print()
@@ -333,6 +333,7 @@ async def main(initial_prompt: str = None):
         memory.log_conversation(
             role="assistant",
             content=response[:2000],
+            session_id="shared_chat",
         )
 
 
