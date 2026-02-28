@@ -247,6 +247,10 @@ proactive/src/agelclaw/           # Python package (pip install)
 
 **Tool hallucination guard.** System prompt explicitly lists the ONLY available tools and warns against using non-existent tools (e.g. `TodoWrite`, `Task`, `TodoRead`) which cause the agent to freeze waiting for a response that never comes.
 
+**Clean notifications.** Telegram notifications use the task's `result` field from `complete_task()` — not the raw agent text which includes internal reasoning ("That found the diavgeia skill, not the weather one..."). Only the clean, human-written result reaches the user.
+
+**Shared conversation session.** All 3 interfaces (Telegram, Web UI, CLI) use `session_id="shared_chat"`. When a subagent task completes, the daemon logs a summary to `shared_chat` so the chat agent immediately knows what happened — no need for the user to ask or the agent to search. Group Telegram chats use a separate `"group_chat"` session for privacy.
+
 ## Configuration (config.yaml)
 
 ```yaml
