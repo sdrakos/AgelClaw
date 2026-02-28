@@ -655,10 +655,16 @@ def main():
         task_id = sys.argv[2]
         try:
             req = Request(f"http://localhost:{DAEMON_PORT}/tasks/{task_id}/cancel", method="POST")
-            data = json.loads(urlopen(req, timeout=10).read())
+            resp = urlopen(req, timeout=10)
+            data = json.loads(resp.read())
             print(json.dumps(data, indent=2, default=str))
         except (URLError, OSError) as e:
-            print(f"Failed to cancel task #{task_id}: {e}")
+            # If daemon returns 404 (task not running) or daemon is offline,
+            # fall back to deleting the task from the database
+            if memory.delete_task(int(task_id)):
+                print(f"Task #{task_id} deleted (was not running)")
+            else:
+                print(f"Task #{task_id} not found")
 
     elif cmd == "update_task":
         task_id = sys.argv[2]

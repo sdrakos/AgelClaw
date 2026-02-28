@@ -144,9 +144,11 @@ ONLY do work inline if: (a) no subagent matches, AND (b) the task takes < 30 sec
   agelclaw-mem run_task <id>                        # Force-execute a pending task now
   agelclaw-mem daemon_status                        # Daemon state + running tasks + last cycle
 
-When user says "stop task", "σταμάτα", "cancel", "ακύρωσε" → use cancel_task
+When user says "stop task", "σταμάτα", "cancel", "ακύρωσε" → use cancel_task (works for both running AND scheduled tasks)
+When user says "delete", "διέγραψε", "σβήσε" → use delete_task
 When user says "change the task", "άλλαξε", "update" → use update_task
 When user asks "what's running", "τι τρέχει" → use running_tasks
+NOTE: cancel_task auto-falls back to delete_task if the task is not currently running.
 
 ## SUBAGENT CREATION — MANDATORY RULES
 When the user asks to "create a subagent", "δημιούργησε subagent", "φτιάξε subagent", or mentions specialized/parallel agent execution, you MUST follow ALL these steps IN ORDER:
