@@ -114,29 +114,34 @@ def get_weather_data(city="Ρόδος", forecast_days=2):
     return data
 
 
-def get_2hour_forecast(data):
-    """Extract 2-hour interval forecast slots from current time onwards."""
+def get_2hour_forecast(data, target_date=None):
+    """Extract 2-hour interval forecast slots.
+    If target_date is provided (datetime.date), show ONLY that day's slots (00:00-22:00).
+    Otherwise, show from current time onwards (next 24h).
+    """
     hourly = data.get("hourly", {})
     times = hourly.get("time", [])
     if not times:
         return []
 
     now = datetime.now()
-    # Round to next even hour
-    current_hour = now.hour
-    if current_hour % 2 == 1:
-        start_hour = current_hour + 1
-    else:
-        start_hour = current_hour + 2
 
     slots = []
     for i, t_str in enumerate(times):
         dt = datetime.strptime(t_str, "%Y-%m-%dT%H:%M")
-        # Only future hours, every 2 hours
-        if dt < now:
-            continue
-        if dt.hour % 2 != 0:
-            continue
+
+        if target_date:
+            # Filter for target date only, every 2 hours (00:00 to 22:00)
+            if dt.date() != target_date:
+                continue
+            if dt.hour % 2 != 0:
+                continue
+        else:
+            # Original behavior: future hours from now
+            if dt < now:
+                continue
+            if dt.hour % 2 != 0:
+                continue
 
         wcode = hourly["weather_code"][i]
         icon, desc, _ = WEATHER_ICONS.get(wcode, ("🌡️", "Άγνωστο", "#95a5a6"))
@@ -156,42 +161,91 @@ def get_2hour_forecast(data):
             "desc": desc,
         })
 
-        if len(slots) >= 12:  # Max 12 slots (24 hours ahead)
+        if not target_date and len(slots) >= 12:
             break
 
     return slots
 
 
-def build_html_email(data, city="Ρόδος"):
+def build_html_email(data, city="Ρόδος", target_date=None):
+    """Build HTML email. If target_date (datetime.date), show forecast for that specific day."""
     now = datetime.now()
-    day_name = DAYS_GR.get(now.strftime("%A"), now.strftime("%A"))
-    month = MONTHS_GR.get(now.month, str(now.month))
-    date_str = f"{day_name} {now.day} {month} {now.year}"
-    time_str = now.strftime("%H:%M")
-
-    cur = data["current"]
-    temp = cur["temperature_2m"]
-    feels = cur["apparent_temperature"]
-    humidity = cur["relative_humidity_2m"]
-    cloud = cur["cloud_cover"]
-    wind_speed = cur["wind_speed_10m"]
-    wind_dir = wind_direction(cur["wind_direction_10m"])
-    wind_gusts = cur["wind_gusts_10m"]
-    precip = cur["precipitation"]
-    pressure = cur["surface_pressure"]
-    wcode = cur["weather_code"]
-    icon, desc, _ = WEATHER_ICONS.get(wcode, ("🌡️", "Άγνωστο", "#95a5a6"))
-
     loc = data["location"]
     location_name = f"{loc['name']}, {loc.get('admin1', '')}"
-
     daily = data.get("daily", {})
-    temp_max = daily.get("temperature_2m_max", [None])[0]
-    temp_min = daily.get("temperature_2m_min", [None])[0]
-    uv_index = daily.get("uv_index_max", [None])[0]
-    sunrise = daily.get("sunrise", [""])[0].split("T")[-1] if daily.get("sunrise") else ""
-    sunset = daily.get("sunset", [""])[0].split("T")[-1] if daily.get("sunset") else ""
-    precip_prob = daily.get("precipitation_probability_max", [0])[0]
+
+    if target_date:
+        # Find the target date's index in daily arrays
+        daily_dates = daily.get("time", [])
+        target_str = target_date.strftime("%Y-%m-%d")
+        day_idx = None
+        for idx, d in enumerate(daily_dates):
+            if d == target_str:
+                day_idx = idx
+                break
+
+        if day_idx is None:
+            raise Exception(f"Target date {target_str} not found in forecast data. Available: {daily_dates}")
+
+        # Use target date info
+        from datetime import date as date_type
+        target_dt = datetime(target_date.year, target_date.month, target_date.day)
+        day_name = DAYS_GR.get(target_dt.strftime("%A"), target_dt.strftime("%A"))
+        month = MONTHS_GR.get(target_date.month, str(target_date.month))
+        date_str = f"{day_name} {target_date.day} {month} {target_date.year}"
+        time_str = "Πρόβλεψη"
+
+        # Use daily data for that specific day
+        temp_max = daily.get("temperature_2m_max", [None])[day_idx]
+        temp_min = daily.get("temperature_2m_min", [None])[day_idx]
+        uv_index = daily.get("uv_index_max", [None])[day_idx]
+        sunrise = daily.get("sunrise", [""])[day_idx].split("T")[-1] if daily.get("sunrise") and len(daily["sunrise"]) > day_idx else ""
+        sunset = daily.get("sunset", [""])[day_idx].split("T")[-1] if daily.get("sunset") and len(daily["sunset"]) > day_idx else ""
+        precip_prob = daily.get("precipitation_probability_max", [0])[day_idx]
+        precip_sum = daily.get("precipitation_sum", [0])[day_idx]
+        wind_max = daily.get("wind_speed_10m_max", [0])[day_idx]
+        wind_gusts_max = daily.get("wind_gusts_10m_max", [0])[day_idx]
+        wcode = daily.get("weather_code", [0])[day_idx]
+
+        icon, desc, _ = WEATHER_ICONS.get(wcode, ("🌡️", "Άγνωστο", "#95a5a6"))
+
+        # For header: use avg temp as representative
+        temp = round((temp_max + temp_min) / 2, 1) if temp_max and temp_min else 0
+        feels_max = daily.get("apparent_temperature_max", [None])[day_idx]
+        feels_min = daily.get("apparent_temperature_min", [None])[day_idx]
+        feels = round((feels_max + feels_min) / 2, 1) if feels_max and feels_min else temp
+        humidity = "--"
+        cloud = "--"
+        wind_speed = wind_max
+        wind_dir = ""
+        wind_gusts = wind_gusts_max
+        precip = precip_sum
+        pressure = "--"
+    else:
+        day_name = DAYS_GR.get(now.strftime("%A"), now.strftime("%A"))
+        month = MONTHS_GR.get(now.month, str(now.month))
+        date_str = f"{day_name} {now.day} {month} {now.year}"
+        time_str = now.strftime("%H:%M")
+
+        cur = data["current"]
+        temp = cur["temperature_2m"]
+        feels = cur["apparent_temperature"]
+        humidity = cur["relative_humidity_2m"]
+        cloud = cur["cloud_cover"]
+        wind_speed = cur["wind_speed_10m"]
+        wind_dir = wind_direction(cur["wind_direction_10m"])
+        wind_gusts = cur["wind_gusts_10m"]
+        precip = cur["precipitation"]
+        pressure = cur["surface_pressure"]
+        wcode = cur["weather_code"]
+        icon, desc, _ = WEATHER_ICONS.get(wcode, ("🌡️", "Άγνωστο", "#95a5a6"))
+
+        temp_max = daily.get("temperature_2m_max", [None])[0]
+        temp_min = daily.get("temperature_2m_min", [None])[0]
+        uv_index = daily.get("uv_index_max", [None])[0]
+        sunrise = daily.get("sunrise", [""])[0].split("T")[-1] if daily.get("sunrise") else ""
+        sunset = daily.get("sunset", [""])[0].split("T")[-1] if daily.get("sunset") else ""
+        precip_prob = daily.get("precipitation_probability_max", [0])[0]
 
     # UV level
     if uv_index and uv_index >= 8:
@@ -214,8 +268,16 @@ def build_html_email(data, city="Ρόδος"):
         bg_gradient = "linear-gradient(135deg, #2c3e50 0%, #3498db 100%)"
 
     # Build 2-hour forecast section
-    forecast_slots = get_2hour_forecast(data)
+    forecast_slots = get_2hour_forecast(data, target_date=target_date)
     forecast_html = _build_forecast_rows(forecast_slots)
+
+    # Adjust forecast header for target date
+    if target_date:
+        forecast_header_title = f"&#128336; Πρόβλεψη {date_str} ανά 2 ώρες"
+        forecast_header_sub = "00:00 - 22:00"
+    else:
+        forecast_header_title = "&#128336; Πρόβλεψη 24 ωρών ανά 2 ώρες"
+        forecast_header_sub = "Επόμενες 24 ώρες από τώρα"
 
     html = f"""<!DOCTYPE html>
 <html lang="el">
@@ -334,8 +396,8 @@ def build_html_email(data, city="Ρόδος"):
 <tr>
 <td style="padding:0 30px 8px;">
   <div style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);border-radius:12px;padding:16px 20px;">
-    <div style="color:white;font-size:16px;font-weight:700;margin-bottom:4px;">&#128336; Πρόβλεψη 24 ωρών ανά 2 ώρες</div>
-    <div style="color:rgba(255,255,255,0.7);font-size:12px;">Επόμενες 24 ώρες από τώρα</div>
+    <div style="color:white;font-size:16px;font-weight:700;margin-bottom:4px;">{forecast_header_title}</div>
+    <div style="color:rgba(255,255,255,0.7);font-size:12px;">{forecast_header_sub}</div>
   </div>
 </td>
 </tr>
@@ -357,7 +419,10 @@ def build_html_email(data, city="Ρόδος"):
 
 </body>
 </html>"""
-    subject = f"{icon} Καιρός {loc['name']}: {temp}°C - {desc} | {date_str} {time_str}"
+    if target_date:
+        subject = f"{icon} Πρόβλεψη {loc['name']}: {temp_min}°→{temp_max}°C - {desc} | {date_str}"
+    else:
+        subject = f"{icon} Καιρός {loc['name']}: {temp}°C - {desc} | {date_str} {time_str}"
     return html, subject
 
 
@@ -455,17 +520,33 @@ def send_email(to_list, subject, html_body):
 
 if __name__ == "__main__":
     import argparse
+    from datetime import date as date_type
     parser = argparse.ArgumentParser(description="Weather Email Report")
     parser.add_argument("--city", default="Ρόδος", help="City name")
     parser.add_argument("--days", type=int, default=2, help="Forecast days (1-16, default 2)")
+    parser.add_argument("--date", type=str, default=None, help="Target date YYYY-MM-DD (show forecast for that specific day)")
     parser.add_argument("--test", action="store_true", help="Send test email to stefanos only")
     parser.add_argument("--to", nargs="+", default=["stefanos.drakos@gmail.com", "aggelikimastrodimitri@gmail.com", "chalikias@hotmail.com"],
                         help="Recipients")
     args = parser.parse_args()
 
+    # If --date is provided, auto-calculate --days needed
+    target_date = None
+    if args.date:
+        target_date = datetime.strptime(args.date, "%Y-%m-%d").date()
+        days_ahead = (target_date - datetime.now().date()).days + 1
+        if days_ahead < 1:
+            print(f"❌ Target date {args.date} is in the past!")
+            sys.exit(1)
+        if days_ahead > 16:
+            print(f"❌ Target date {args.date} is too far ahead (max 16 days)!")
+            sys.exit(1)
+        args.days = max(args.days, days_ahead)
+        print(f"📅 Target date: {args.date} ({days_ahead} days ahead, fetching {args.days} days)")
+
     print(f"🌤️ Fetching weather for {args.city}...")
     data = get_weather_data(args.city, forecast_days=args.days)
-    html, subject = build_html_email(data, args.city)
+    html, subject = build_html_email(data, args.city, target_date=target_date)
 
     if args.test:
         recipients = ["stefanos.drakos@gmail.com"]
