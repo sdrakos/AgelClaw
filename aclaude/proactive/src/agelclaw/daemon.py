@@ -68,6 +68,7 @@ API_PORT = _cfg.get("daemon_port", 8420)
 WEBHOOK_URL = os.getenv("AGENT_WEBHOOK_URL", "")  # POST cycle summaries here
 TASK_TIMEOUT = int(_cfg.get("task_timeout", 300))  # 5 min max per task
 TASK_INACTIVITY_TIMEOUT = int(_cfg.get("task_inactivity_timeout", 120))  # 2 min no activity = kill
+SCRIPT_TIMEOUT = int(_cfg.get("script_timeout", 7200))  # 2 hours max for direct script tasks
 
 _router = AgentRouter()
 from agelclaw.project import get_project_dir, get_log_dir, get_skills_dir, get_persona_dir
@@ -380,7 +381,7 @@ def _parse_subagent_md(name: str) -> dict:
 
     content = sub_md.read_text(encoding="utf-8", errors="replace")
 
-    result = {"name": name, "description": "", "provider": "auto", "task_type": "general", "tools": None, "body": ""}
+    result = {"name": name, "description": "", "provider": "auto", "task_type": "general", "tools": None, "command": "", "body": ""}
 
     # Parse YAML frontmatter
     fm_match = re.search(r'^---\s*\n(.*?)\n---', content, re.DOTALL)
@@ -392,6 +393,7 @@ def _parse_subagent_md(name: str) -> dict:
                 result["provider"] = fm_data.get("provider", "auto")
                 result["task_type"] = fm_data.get("task_type", "general")
                 result["tools"] = fm_data.get("tools")  # None means use defaults
+                result["command"] = fm_data.get("command", "")  # Direct script execution command
         except Exception:
             pass  # Fall back to regex parsing
             d = re.search(r'description:\s*(.+)', fm_match.group(1))
@@ -1077,6 +1079,234 @@ async def execute_subagent_task(task: dict, cycle_session: str):
                 agent_status["state"] = "idle"
 
 
+async def execute_script_task(task: dict, cycle_session: str):
+    """Execute a task by running a shell command directly — NO AI agent.
+
+    Used for task_type=script subagents. The subagent's SUBAGENT.md must contain
+    a 'command' field in the YAML frontmatter specifying the exact command to run.
+
+    Benefits:
+    - No inactivity timeout (script manages its own pacing)
+    - Much higher timeout (SCRIPT_TIMEOUT, default 2 hours)
+    - No AI overhead — just subprocess exec + result capture
+    """
+    task_id = task["id"]
+    task_title = task.get("title", f"Task #{task_id}")
+    subagent_name = task.get("assigned_to", "script")
+    task_start = datetime.now()
+    session_id = f"script_{subagent_name}_{task_id}_{task_start.strftime('%Y%m%d_%H%M%S')}"
+
+    # Parse subagent to get the command
+    sa = _parse_subagent_md(subagent_name)
+    command = sa.get("command", "").strip()
+    if not command:
+        log.error(f"[Script Task #{task_id}] No 'command' in SUBAGENT.md frontmatter for '{subagent_name}'")
+        memory.update_task(task_id, status="failed", error=f"No 'command' defined in subagent '{subagent_name}'")
+        send_telegram_notification(task_id, task_title, "failed", f"Δεν βρέθηκε command στο subagent '{subagent_name}'")
+        return
+
+    async with task_semaphore:
+        # Register as running
+        running_task_ids.add(task_id)
+        memory.start_task(task_id)
+        agent_status["running_tasks"][task_id] = {
+            "title": task_title,
+            "subagent": subagent_name,
+            "type": "script",
+            "started_at": task_start.isoformat(),
+            "session_id": session_id,
+        }
+        agent_status["state"] = "running"
+
+        log.info(f">>> Script Task #{task_id} started: {task_title}")
+        log.info(f"    Command: {command}")
+        _broadcast_event("task_start", {
+            "session_id": session_id,
+            "task_id": task_id,
+            "task_title": task_title,
+            "subagent": subagent_name,
+            "type": "script",
+            "cycle_session": cycle_session,
+        })
+        send_telegram_notification(task_id, task_title, "started", f"Script εκτέλεση: {command[:100]}...")
+
+        task_folder = memory.get_task_folder(task_id)
+
+        try:
+            # Run the command as a subprocess with SCRIPT_TIMEOUT
+            creationflags = 0
+            if sys.platform == "win32":
+                creationflags = subprocess.CREATE_NO_WINDOW
+
+            proc = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(proactive_dir),
+                creationflags=creationflags,
+            )
+
+            # Stream stdout in real-time for logging
+            stdout_lines = []
+            stderr_lines = []
+
+            async def _read_stream(stream, lines_list, label):
+                while True:
+                    line = await stream.readline()
+                    if not line:
+                        break
+                    decoded = line.decode("utf-8", errors="replace").rstrip()
+                    lines_list.append(decoded)
+                    elapsed = (datetime.now() - task_start).total_seconds()
+                    log.info(f"[Script #{task_id}] [{elapsed:.0f}s] {label}: {decoded[:200]}")
+                    # Broadcast progress
+                    _broadcast_event("agent_text", {
+                        "session_id": session_id,
+                        "task_id": task_id,
+                        "task_title": task_title,
+                        "subagent": subagent_name,
+                        "text": f"[{label}] {decoded[:300]}",
+                    })
+
+            # Read stdout and stderr concurrently, with overall timeout
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(
+                        _read_stream(proc.stdout, stdout_lines, "stdout"),
+                        _read_stream(proc.stderr, stderr_lines, "stderr"),
+                    ),
+                    timeout=SCRIPT_TIMEOUT,
+                )
+                await proc.wait()
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                raise TimeoutError(
+                    f"Script task '{subagent_name}' exceeded timeout "
+                    f"({SCRIPT_TIMEOUT}s / {SCRIPT_TIMEOUT//3600}h)"
+                )
+
+            duration = (datetime.now() - task_start).total_seconds()
+            exit_code = proc.returncode
+            stdout_text = "\n".join(stdout_lines)
+            stderr_text = "\n".join(stderr_lines)
+
+            # Save full output to task folder
+            try:
+                (task_folder / "stdout.txt").write_text(stdout_text, encoding="utf-8")
+                if stderr_text:
+                    (task_folder / "stderr.txt").write_text(stderr_text, encoding="utf-8")
+                (task_folder / "logs.txt").write_text(
+                    f"Command: {command}\n"
+                    f"Exit code: {exit_code}\n"
+                    f"Duration: {duration:.1f}s\n"
+                    f"Started: {task_start.isoformat()}\n"
+                    f"Finished: {datetime.now().isoformat()}\n",
+                    encoding="utf-8",
+                )
+            except Exception as log_err:
+                log.warning(f"Failed to write script output: {log_err}")
+
+            if exit_code == 0:
+                # Success — use last 500 chars of stdout as result
+                result_text = stdout_text[-500:].strip() if stdout_text else "Script completed successfully"
+                log.info(f"<<< Script Task #{task_id} SUCCESS: {duration:.1f}s, exit=0")
+                memory.complete_task(task_id, result=result_text)
+                memory.log_conversation(
+                    role="assistant",
+                    content=f"Script task '{task_title}' (subagent: {subagent_name}) completed in {duration:.1f}s. Exit=0. Output: {result_text[:300]}",
+                    session_id="shared_chat",
+                )
+                _broadcast_event("task_end", {
+                    "session_id": session_id,
+                    "task_id": task_id,
+                    "task_title": task_title,
+                    "subagent": subagent_name,
+                    "type": "script",
+                    "duration_s": round(duration, 1),
+                    "exit_code": 0,
+                })
+                send_task_notification(task_id=task_id, task_title=task_title, status="completed", result=result_text, duration=duration)
+                send_telegram_notification(task_id=task_id, task_title=task_title, status="completed", result=result_text, duration=duration)
+            else:
+                # Failed — include stderr
+                error_text = stderr_text[-500:].strip() if stderr_text else f"Exit code {exit_code}"
+                log.error(f"<<< Script Task #{task_id} FAILED: {duration:.1f}s, exit={exit_code}")
+                memory.update_task(task_id, status="failed", error=error_text)
+                memory.log_conversation(
+                    role="system",
+                    content=f"Script task '{task_title}' FAILED (exit={exit_code}): {error_text[:300]}",
+                    session_id="shared_chat",
+                )
+                _broadcast_event("task_error", {
+                    "session_id": session_id,
+                    "task_id": task_id,
+                    "task_title": task_title,
+                    "subagent": subagent_name,
+                    "type": "script",
+                    "error": error_text[:500],
+                    "exit_code": exit_code,
+                    "duration_s": round(duration, 1),
+                })
+                send_task_notification(task_id=task_id, task_title=task_title, status="failed", result=f"Exit code {exit_code}: {error_text}", duration=duration)
+                send_telegram_notification(task_id=task_id, task_title=task_title, status="failed", result=f"Script failed (exit {exit_code}): {error_text[:300]}", duration=duration)
+
+        except asyncio.CancelledError:
+            duration = (datetime.now() - task_start).total_seconds()
+            log.info(f"[Script Task #{task_id}] Cancelled after {duration:.1f}s")
+            memory.update_task(task_id, status="cancelled", result="Cancelled by user")
+            _broadcast_event("task_cancelled", {
+                "session_id": session_id,
+                "task_id": task_id,
+                "task_title": task_title,
+                "subagent": subagent_name,
+                "duration_s": round(duration, 1),
+            })
+            send_telegram_notification(task_id, task_title, "cancelled", "Ακυρώθηκε από τον χρήστη", duration)
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            raise
+
+        except TimeoutError as e:
+            duration = (datetime.now() - task_start).total_seconds()
+            log.error(f"[Script Task #{task_id}] TIMEOUT: {e}")
+            memory.update_task(task_id, status="failed", error=str(e))
+            _broadcast_event("task_error", {
+                "session_id": session_id,
+                "task_id": task_id,
+                "task_title": task_title,
+                "subagent": subagent_name,
+                "error": str(e),
+                "duration_s": round(duration, 1),
+            })
+            send_task_notification(task_id=task_id, task_title=task_title, status="failed", result=f"TIMEOUT: {e}", duration=duration)
+            send_telegram_notification(task_id=task_id, task_title=task_title, status="failed", result=f"Script timeout μετά από {duration:.0f}s", duration=duration)
+
+        except Exception as e:
+            duration = (datetime.now() - task_start).total_seconds()
+            log.error(f"[Script Task #{task_id}] Error: {e}", exc_info=True)
+            memory.update_task(task_id, status="failed", error=str(e))
+            _broadcast_event("task_error", {
+                "session_id": session_id,
+                "task_id": task_id,
+                "task_title": task_title,
+                "subagent": subagent_name,
+                "error": str(e),
+                "duration_s": round(duration, 1),
+            })
+            send_task_notification(task_id=task_id, task_title=task_title, status="failed", result=f"ERROR: {str(e)}", duration=duration)
+            send_telegram_notification(task_id=task_id, task_title=task_title, status="failed", result=f"Script error: {str(e)[:300]}", duration=duration)
+
+        finally:
+            running_task_ids.discard(task_id)
+            running_asyncio_tasks.pop(task_id, None)
+            agent_status["running_tasks"].pop(task_id, None)
+            if not agent_status["running_tasks"]:
+                agent_status["state"] = "idle"
+
+
 async def run_agent_cycle(reason: str = "scheduled"):
     """Orchestrate a cycle: gather tasks and launch parallel execution."""
     cycle_start = datetime.now()
@@ -1127,13 +1357,21 @@ async def run_agent_cycle(reason: str = "scheduled"):
         log.info(f"  Task #{t['id']} '{t.get('title', '')[:60]}' [pri:{t.get('priority', 5)}] {route_label}")
 
     # Launch all tasks concurrently — semaphore handles throttling
-    # Route: subagent-assigned tasks use execute_subagent_task, others use execute_single_task
+    # Route: task_type=script → execute_script_task (direct subprocess, no AI)
+    #        assigned_to → execute_subagent_task (AI agent with subagent prompt)
+    #        else → execute_single_task (general daemon agent)
     agent_status["state"] = "running"
     coros = []
     for t in tasks_to_run:
         if t.get("assigned_to"):
-            log.info(f"  Routing Task #{t['id']} to execute_subagent_task('{t['assigned_to']}')")
-            atask = asyncio.create_task(execute_subagent_task(t, cycle_session))
+            # Check if this subagent uses direct script execution
+            sa_def = _parse_subagent_md(t["assigned_to"])
+            if sa_def.get("task_type") == "script" and sa_def.get("command"):
+                log.info(f"  Routing Task #{t['id']} to execute_script_task('{t['assigned_to']}') [DIRECT SCRIPT]")
+                atask = asyncio.create_task(execute_script_task(t, cycle_session))
+            else:
+                log.info(f"  Routing Task #{t['id']} to execute_subagent_task('{t['assigned_to']}')")
+                atask = asyncio.create_task(execute_subagent_task(t, cycle_session))
         else:
             log.info(f"  Routing Task #{t['id']} to execute_single_task()")
             atask = asyncio.create_task(execute_single_task(t, cycle_session))
