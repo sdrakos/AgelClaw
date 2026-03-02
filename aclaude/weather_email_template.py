@@ -526,8 +526,8 @@ if __name__ == "__main__":
     parser.add_argument("--days", type=int, default=2, help="Forecast days (1-16, default 2)")
     parser.add_argument("--date", type=str, default=None, help="Target date YYYY-MM-DD (show forecast for that specific day)")
     parser.add_argument("--test", action="store_true", help="Send test email to stefanos only")
-    parser.add_argument("--to", nargs="+", default=["stefanos.drakos@gmail.com", "aggelikimastrodimitri@gmail.com", "chalikias@hotmail.com"],
-                        help="Recipients")
+    parser.add_argument("--to", nargs="+", default=None,
+                        help="Recipients (required unless --test)")
     args = parser.parse_args()
 
     # If --date is provided, auto-calculate --days needed
@@ -548,8 +548,16 @@ if __name__ == "__main__":
     data = get_weather_data(args.city, forecast_days=args.days)
     html, subject = build_html_email(data, args.city, target_date=target_date)
 
+    if not args.test and not args.to:
+        print("❌ Error: No recipients. Use --to email1 email2 or --test")
+        sys.exit(1)
+
     if args.test:
-        recipients = ["stefanos.drakos@gmail.com"]
+        if args.to:
+            recipients = args.to
+        else:
+            print("❌ Error: --test requires --to with at least one recipient")
+            sys.exit(1)
         subject = f"[TEST] {subject}"
     else:
         recipients = args.to

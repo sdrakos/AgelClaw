@@ -24,6 +24,7 @@ import asyncio
 import io
 import json
 import os
+import re
 import sys
 import logging
 import subprocess
@@ -1079,11 +1080,73 @@ async def execute_subagent_task(task: dict, cycle_session: str):
                 agent_status["state"] = "idle"
 
 
+def _has_greek(s: str) -> bool:
+    """Check if string contains Greek Unicode characters."""
+    return any('\u0370' <= c <= '\u03ff' or '\u1f00' <= c <= '\u1fff' for c in s)
+
+
+def _extract_cli_from_description(description: str) -> dict:
+    """Extract CLI arguments (--flag value...) from task description text.
+
+    Scans from the first --flag to the end of the description.
+    Ignores tokens containing Greek characters (natural language).
+    Strips trailing punctuation from flags and values (e.g. --skip-voice. → --skip-voice).
+    Returns dict of {flag: [values...]}.
+    """
+    if not description:
+        return {}
+
+    # Find first -- in description
+    idx = description.find('--')
+    if idx == -1:
+        return {}
+
+    cli_section = description[idx:]
+    tokens = cli_section.split()
+
+    overrides = {}
+    current_flag = None
+    for token in tokens:
+        # Strip trailing punctuation that comes from natural language sentences
+        clean = token.rstrip('.,;:!?)')
+        if clean.startswith('--') and len(clean) > 2:
+            current_flag = clean
+            overrides[current_flag] = []
+        elif current_flag and not _has_greek(token):
+            overrides[current_flag].append(clean)
+        else:
+            # Greek text or non-CLI token after values → stop collecting
+            current_flag = None
+
+    return overrides
+
+
+def _apply_cli_overrides(command: str, overrides: dict) -> str:
+    """Replace or append CLI flag overrides in the base command.
+
+    For each --flag in overrides:
+    - If the flag exists in the command, replace it and its values.
+    - If the flag does not exist, append it to the command.
+    """
+    for flag, values in overrides.items():
+        override_str = flag + (' ' + ' '.join(values) if values else '')
+        # Pattern: --flag followed by non-flag values (tokens not starting with --)
+        pattern = re.compile(rf'{re.escape(flag)}(?:\s+(?!--)\S+)*')
+        if pattern.search(command):
+            command = pattern.sub(override_str, command, count=1)
+        else:
+            command = command.rstrip() + ' ' + override_str
+    return command
+
+
 async def execute_script_task(task: dict, cycle_session: str):
     """Execute a task by running a shell command directly — NO AI agent.
 
     Used for task_type=script subagents. The subagent's SUBAGENT.md must contain
     a 'command' field in the YAML frontmatter specifying the exact command to run.
+
+    CLI arguments in the task description (e.g. --to email@example.com) will
+    override the corresponding flags in the base command.
 
     Benefits:
     - No inactivity timeout (script manages its own pacing)
@@ -1104,6 +1167,16 @@ async def execute_script_task(task: dict, cycle_session: str):
         memory.update_task(task_id, status="failed", error=f"No 'command' defined in subagent '{subagent_name}'")
         send_telegram_notification(task_id, task_title, "failed", f"Δεν βρέθηκε command στο subagent '{subagent_name}'")
         return
+
+    # ── CLI override: extract --flag values from task description and merge ──
+    description = task.get("description", "")
+    cli_overrides = _extract_cli_from_description(description)
+    if cli_overrides:
+        original_command = command
+        command = _apply_cli_overrides(command, cli_overrides)
+        log.info(f"[Script Task #{task_id}] CLI overrides from description: {cli_overrides}")
+        log.info(f"[Script Task #{task_id}] Original command: {original_command}")
+        log.info(f"[Script Task #{task_id}] Final command:    {command}")
 
     async with task_semaphore:
         # Register as running

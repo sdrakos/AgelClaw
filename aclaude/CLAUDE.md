@@ -2,6 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## MANDATORY: Keep This File Updated
+
+**Before every commit and push**, update this CLAUDE.md to reflect any changes made in the session:
+- New design decisions → add to "Key Design Decisions"
+- New files or modules → update "Source Code Map"
+- New CLI commands → update "Development"
+- New config keys → update "Configuration"
+- Architecture changes → update "Architecture"
+
 ## What This Is
 
 **AgelClaw v3.1.0** — a self-evolving autonomous assistant with multi-provider support (Claude + OpenAI), persistent memory, skills, and subagents.
@@ -151,13 +160,6 @@ proactive/src/agelclaw/           # Python package (pip install)
     ├── react_dist/               # Pre-built React chat UI
     ├── skills/                   # 16 bundled skills (pdf, xlsx, pptx, email, skill-creator, subagent-creator, etc.)
     └── templates/                # Config + persona templates copied on init
-        ├── config.yaml.example
-        ├── .env.example
-        ├── ecosystem.config.js
-        ├── SOUL.md               # Persona: core values & behavior rules
-        ├── IDENTITY.md           # Persona: agent name, vibe, user info
-        ├── BOOTSTRAP.md          # Persona: first-run onboarding (self-deleting)
-        └── HEARTBEAT.md          # Persona: heartbeat checklist
 ```
 
 ### Project Directory (mutable user data)
@@ -188,7 +190,11 @@ proactive/src/agelclaw/           # Python package (pip install)
 
 **Auto-start daemon.** `cli_entry.py` has `_ensure_daemon(port)` / `_stop_daemon(proc)` helpers. Every command checks if daemon is running via port check, starts it as subprocess if not, terminates on exit. `--no-daemon` flag to opt out.
 
+**Graceful daemon proxy.** `api_server.py` catches `httpx.ConnectError` on daemon proxy — returns SSE `daemon_offline` event for `/daemon/events` or HTTP 503 for other paths. No crash when daemon is down.
+
 **Multi-provider routing.** `core/agent_router.py` routes tasks: code/debug→Claude Opus, research→OpenAI GPT-4.1, simple→GPT-4.1-mini, chat→Claude Sonnet. Returns `RouteResult(provider, model, reason)`. Fallback to available provider.
+
+**YAML config + env var overrides.** `core/config.py` loads `config.yaml`, maps keys to env vars (e.g. `anthropic_api_key` → `ANTHROPIC_API_KEY`). Env vars win. Singleton with `load_config(force_reload=True)`.
 
 **Non-streaming SDK on Windows.** Claude Agent SDK streaming has initialization timeouts on Windows. All services use non-streaming `query(prompt=string)`. MCP tools replaced by `agelclaw-mem` CLI called via Bash.
 
@@ -197,6 +203,12 @@ proactive/src/agelclaw/           # Python package (pip install)
 **Task timeouts.** `task_timeout` (default 300s) limits total task duration. `task_inactivity_timeout` (default 120s) kills tasks that stop producing messages. On timeout, task is marked `failed` with Telegram notification.
 
 **Tool hallucination guard.** System prompt explicitly lists the ONLY available tools and warns against using non-existent tools (e.g. `TodoWrite`, `Task`, `TodoRead`) which cause the agent to freeze waiting for a response that never comes.
+
+**Skill-first execution.** Before any task, agents call `agelclaw-mem find_skill "<description>"`. If no match: research, create skill (SKILL.md + scripts/ + references/), then execute.
+
+**Hard rules (promoted learnings).** Learnings promoted to rules (`is_rule=1`) are injected into every system prompt via `memory.build_rules_prompt()`.
+
+**Subagent system.** Defined in `subagents/<name>/SUBAGENT.md` (YAML frontmatter: provider, task_type, tools) with optional `scripts/` and `references/` dirs. Daemon routes assigned tasks to `execute_subagent_task()` which uses `AgentDefinition` (Claude) or custom system prompt (OpenAI).
 
 **Subagent delegation.** System prompt enforces that the chat agent MUST delegate to an existing subagent instead of executing long-running work inline. Agent creates a task via `add_subagent_task` and responds immediately, freeing the chat. Daemon executes the subagent in the background.
 
@@ -210,15 +222,11 @@ proactive/src/agelclaw/           # Python package (pip install)
 
 **Heartbeat proactivity.** Daemon runs `_maybe_run_heartbeat()` after each scheduler cycle. Controlled by `heartbeat_enabled`, `heartbeat_interval_hours`, `heartbeat_quiet_start/end` in config.yaml. Reads `persona/HEARTBEAT.md` for a user-editable checklist. Sends Telegram messages only when actionable.
 
-**Skill-first execution.** Before any task, agents call `agelclaw-mem find_skill "<description>"`. If no match: research, create skill (SKILL.md + scripts/ + references/), then execute.
-
-**Hard rules (promoted learnings).** Learnings promoted to rules (`is_rule=1`) are injected into every system prompt via `memory.build_rules_prompt()`.
-
-**cancel_task fallback.** `cancel_task` in mem_cli first tries the daemon endpoint (for running tasks). If daemon returns 404, falls back to `delete_task` (removes from database).
-
 **Clean notifications.** Telegram notifications use the task's `result` field from `complete_task()` — not raw agent text with internal reasoning.
 
 **Telegram notification splitting.** `send_telegram_notification()` splits long results into multiple messages (4096 char limit per message) instead of truncating.
+
+**cancel_task fallback.** `cancel_task` in mem_cli first tries the daemon endpoint (for running tasks). If daemon returns 404, falls back to `delete_task` (removes from database).
 
 **Confirmation = Execute.** When the user says "ναι", "yes", "nai", "ok" in response to a proposed action, the agent executes immediately — no re-description, no second confirmation.
 
