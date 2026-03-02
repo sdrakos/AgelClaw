@@ -41,6 +41,7 @@ _TASK_ROUTING = {
     "analysis": (Provider.OPENAI, "gpt-4.1"),
     "simple": (Provider.OPENAI, "gpt-4.1-mini"),
     "chat": (Provider.CLAUDE, "claude-sonnet-4-5-20250929"),
+    "heartbeat": (Provider.OPENAI, "gpt-4.1-mini"),
     "general": (Provider.CLAUDE, "claude-opus-4-6"),
 }
 

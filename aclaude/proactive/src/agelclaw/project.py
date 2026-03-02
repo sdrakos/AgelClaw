@@ -38,6 +38,11 @@ def get_bundled_skills_dir() -> Path:
     return get_package_data_dir() / "skills"
 
 
+def get_bundled_mcp_servers_dir() -> Path:
+    """Return the path to bundled default MCP servers."""
+    return get_package_data_dir() / "mcp_servers"
+
+
 def get_templates_dir() -> Path:
     """Return the path to bundled config templates."""
     return get_package_data_dir() / "templates"
@@ -138,6 +143,13 @@ def get_persona_dir() -> Path:
     return d
 
 
+def get_mcp_servers_dir() -> Path:
+    """Path to MCP server definitions directory."""
+    d = get_project_dir() / "mcp_servers"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 # ── Project initialization ────────────────────────────────────
 
 def init_project(path: Path | str | None = None) -> Path:
@@ -164,7 +176,7 @@ def init_project(path: Path | str | None = None) -> Path:
         project.mkdir(parents=True, exist_ok=True)
 
     # Create directories
-    for subdir in ("data", "logs", "tasks", "subagents", "reports"):
+    for subdir in ("data", "logs", "tasks", "subagents", "reports", "mcp_servers"):
         (project / subdir).mkdir(parents=True, exist_ok=True)
 
     skills_dir = project / ".Claude" / "Skills"
@@ -195,6 +207,16 @@ def init_project(path: Path | str | None = None) -> Path:
                 skill_dst = skills_dir / skill_src.name
                 if not skill_dst.exists():
                     shutil.copytree(skill_src, skill_dst)
+
+    # Copy bundled MCP servers
+    bundled_mcp = get_bundled_mcp_servers_dir()
+    mcp_dir = project / "mcp_servers"
+    if bundled_mcp.exists():
+        for mcp_src in bundled_mcp.iterdir():
+            if mcp_src.is_dir():
+                mcp_dst = mcp_dir / mcp_src.name
+                if not mcp_dst.exists():
+                    shutil.copytree(mcp_src, mcp_dst)
 
     # Copy persona templates (SOUL.md, IDENTITY.md, BOOTSTRAP.md, HEARTBEAT.md)
     persona_dir = project / "persona"

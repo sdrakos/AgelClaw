@@ -28,7 +28,7 @@ import re
 import sys
 import logging
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # Fix Windows cp1253 encoding — emojis and unicode must not crash the logger
@@ -59,7 +59,7 @@ from agelclaw.skill_tools import ALL_SKILL_TOOLS
 
 from agelclaw.core.config import load_config
 from agelclaw.core.agent_router import AgentRouter, Provider
-from agelclaw.agent_config import get_agent, get_system_prompt, AGENT_TOOLS, ALLOWED_TOOLS
+from agelclaw.agent_config import get_agent, get_system_prompt, AGENT_TOOLS, ALLOWED_TOOLS, _scan_mcp_servers, _build_mcp_tool_wildcards, load_mcp_server_config
 
 _cfg = load_config()
 CHECK_INTERVAL = _cfg.get("check_interval", 300)
@@ -382,7 +382,8 @@ def _parse_subagent_md(name: str) -> dict:
 
     content = sub_md.read_text(encoding="utf-8", errors="replace")
 
-    result = {"name": name, "description": "", "provider": "auto", "task_type": "general", "tools": None, "command": "", "body": ""}
+    result = {"name": name, "description": "", "provider": "auto", "task_type": "general", "tools": None, "command": "", "body": "",
+              "timeout": None, "inactivity_timeout": None, "max_turns": None, "max_retries": 0, "mcp_servers": []}
 
     # Parse YAML frontmatter
     fm_match = re.search(r'^---\s*\n(.*?)\n---', content, re.DOTALL)
@@ -395,6 +396,19 @@ def _parse_subagent_md(name: str) -> dict:
                 result["task_type"] = fm_data.get("task_type", "general")
                 result["tools"] = fm_data.get("tools")  # None means use defaults
                 result["command"] = fm_data.get("command", "")  # Direct script execution command
+                # Per-subagent timeout overrides
+                if "timeout" in fm_data:
+                    result["timeout"] = int(fm_data["timeout"])
+                if "inactivity_timeout" in fm_data:
+                    result["inactivity_timeout"] = int(fm_data["inactivity_timeout"])
+                if "max_turns" in fm_data:
+                    result["max_turns"] = int(fm_data["max_turns"])
+                if "max_retries" in fm_data:
+                    result["max_retries"] = int(fm_data["max_retries"])
+                if "mcp_servers" in fm_data:
+                    mcp_list = fm_data["mcp_servers"]
+                    if isinstance(mcp_list, list):
+                        result["mcp_servers"] = mcp_list
         except Exception:
             pass  # Fall back to regex parsing
             d = re.search(r'description:\s*(.+)', fm_match.group(1))
@@ -466,6 +480,7 @@ async def execute_single_task(task: dict, cycle_session: str):
             "title": task_title,
             "started_at": task_start.isoformat(),
             "session_id": session_id,
+            "timeout": TASK_TIMEOUT,
         }
         agent_status["state"] = "running"
 
@@ -536,6 +551,7 @@ async def execute_single_task(task: dict, cycle_session: str):
 
         full_response = []
         tools_used = []
+        turn_count = 0
 
         try:
             if route.provider == Provider.OPENAI:
@@ -565,14 +581,23 @@ async def execute_single_task(task: dict, cycle_session: str):
             else:
                 # Claude execution path — let SDK find bundled claude.exe
                 log.info(f"[Task #{task_id}] Using Claude ({route.model})")
+
+                # Load auto-loaded MCP servers
+                mcp_configs, _ = _scan_mcp_servers()
+                allowed = list(AGENT_TOOLS)
+                if mcp_configs:
+                    allowed += _build_mcp_tool_wildcards(mcp_configs)
+
                 options = ClaudeAgentOptions(
                     system_prompt=_get_daemon_prompt(),
-                    allowed_tools=AGENT_TOOLS,
+                    allowed_tools=allowed,
                     setting_sources=["user", "project"],
                     permission_mode="bypassPermissions",
                     cwd=str(proactive_dir),
                     max_turns=30,
                 )
+                if mcp_configs:
+                    options.mcp_servers = mcp_configs
 
                 last_progress_log = task_start
                 last_activity_g = datetime.now()
@@ -701,18 +726,23 @@ async def execute_single_task(task: dict, cycle_session: str):
 
         except TimeoutError as e:
             duration = (datetime.now() - task_start).total_seconds()
-            log.error(f"[Task #{task_id}] TIMEOUT after {duration:.1f}s: {e}")
-            memory.update_task(task_id, status="failed", error=str(e))
-            memory.log_conversation(role="system", content=f"Task #{task_id} TIMEOUT: {e}", session_id=session_id)
+            last_tool = tools_used[-1] if tools_used else "none"
+            last_text_preview = full_response[-1][:100] if full_response else "none"
+            diagnostic = f"Last tool: {last_tool} | Turns: {turn_count} | Last output: {last_text_preview}"
+            log.error(f"[Task #{task_id}] TIMEOUT after {duration:.1f}s: {e}\n  {diagnostic}")
+            memory.update_task(task_id, status="failed", error=f"{e} | {diagnostic}")
+            memory.log_conversation(role="system", content=f"Task #{task_id} TIMEOUT: {e}\n{diagnostic}", session_id=session_id)
             _broadcast_event("task_error", {
                 "session_id": session_id,
                 "task_id": task_id,
                 "task_title": task_title,
                 "error": str(e),
+                "diagnostic": diagnostic,
                 "duration_s": round(duration, 1),
             })
             send_task_notification(task_id=task_id, task_title=task_title, status="failed", result=f"TIMEOUT: {e}", duration=duration)
-            send_telegram_notification(task_id=task_id, task_title=task_title, status="failed", result=f"Timeout — ο agent κόλλησε μετά από {duration:.0f}s και τερματίστηκε αυτόματα.", duration=duration)
+            tg_msg = f"Timeout μετά από {duration:.0f}s\nΤελευταίο tool: {last_tool}\nTurns: {turn_count}"
+            send_telegram_notification(task_id=task_id, task_title=task_title, status="failed", result=tg_msg, duration=duration)
 
         except Exception as e:
             duration = (datetime.now() - task_start).total_seconds()
@@ -763,6 +793,17 @@ async def execute_subagent_task(task: dict, cycle_session: str):
     task_start = datetime.now()
     session_id = f"subagent_{subagent_name}_{task_id}_{task_start.strftime('%Y%m%d_%H%M%S')}"
 
+    # Parse subagent definition BEFORE acquiring semaphore (needed for timeout tracking)
+    sa = _parse_subagent_md(subagent_name)
+    sa_has_def = bool(sa.get("body"))
+    sa_tools_info = sa.get("tools") or "all (default)"
+
+    # Resolve per-subagent timeouts (SUBAGENT.md overrides > global config)
+    sa_timeout = sa.get("timeout") or TASK_TIMEOUT
+    sa_inactivity = sa.get("inactivity_timeout") or TASK_INACTIVITY_TIMEOUT
+    sa_max_turns = sa.get("max_turns") or 30
+    sa_max_retries = sa.get("max_retries") or 0
+
     async with task_semaphore:
         # Register as running — both in-memory AND in database
         running_task_ids.add(task_id)
@@ -772,10 +813,16 @@ async def execute_subagent_task(task: dict, cycle_session: str):
             "subagent": subagent_name,
             "started_at": task_start.isoformat(),
             "session_id": session_id,
+            "timeout": sa_timeout,
         }
         agent_status["state"] = "running"
 
         log.info(f">>> Subagent '{subagent_name}' Task #{task_id} started: {task_title}")
+        log.info(f"[Subagent '{subagent_name}' Task #{task_id}] SUBAGENT.md: {'found' if sa_has_def else 'NOT FOUND'}, "
+                 f"provider={sa.get('provider', 'auto')}, task_type={sa.get('task_type', 'general')}, tools={sa_tools_info}")
+        log.info(f"[Subagent '{subagent_name}' Task #{task_id}] Timeouts: total={sa_timeout}s, inactivity={sa_inactivity}s, max_turns={sa_max_turns}, max_retries={sa_max_retries}")
+        if not sa_has_def:
+            log.warning(f"[Subagent '{subagent_name}' Task #{task_id}] No SUBAGENT.md found — will use default daemon prompt")
         _broadcast_event("task_start", {
             "session_id": session_id,
             "task_id": task_id,
@@ -784,15 +831,6 @@ async def execute_subagent_task(task: dict, cycle_session: str):
             "cycle_session": cycle_session,
         })
         send_telegram_notification(task_id, task_title, "started", f"Started executing (subagent: {subagent_name})...")
-
-        # Parse subagent definition
-        sa = _parse_subagent_md(subagent_name)
-        sa_has_def = bool(sa.get("body"))
-        sa_tools_info = sa.get("tools") or "all (default)"
-        log.info(f"[Subagent '{subagent_name}' Task #{task_id}] SUBAGENT.md: {'found' if sa_has_def else 'NOT FOUND'}, "
-                 f"provider={sa.get('provider', 'auto')}, task_type={sa.get('task_type', 'general')}, tools={sa_tools_info}")
-        if not sa_has_def:
-            log.warning(f"[Subagent '{subagent_name}' Task #{task_id}] No SUBAGENT.md found — will use default daemon prompt")
 
         # Build focused task prompt
         context = memory.build_context_summary()
@@ -871,6 +909,7 @@ async def execute_subagent_task(task: dict, cycle_session: str):
 
         full_response = []
         tools_used = []
+        turn_count = 0
 
         try:
             if route.provider == Provider.OPENAI:
@@ -904,9 +943,22 @@ async def execute_subagent_task(task: dict, cycle_session: str):
                 # Claude path — use AgentDefinition for isolated subagent context
                 log.info(f"[Subagent '{subagent_name}' Task #{task_id}] Using Claude with AgentDefinition")
 
+                # Load MCP servers: auto-loaded + subagent-specific
+                mcp_configs, _ = _scan_mcp_servers()
+                sa_mcp_names = sa.get("mcp_servers", [])
+                for mcp_name in sa_mcp_names:
+                    if mcp_name not in mcp_configs:
+                        cfg = load_mcp_server_config(mcp_name)
+                        if cfg:
+                            mcp_configs[mcp_name] = cfg
+
+                allowed = list(AGENT_TOOLS) + ["Task"]
+                if mcp_configs:
+                    allowed += _build_mcp_tool_wildcards(mcp_configs)
+
                 options = ClaudeAgentOptions(
                     system_prompt=_get_daemon_prompt(),
-                    allowed_tools=AGENT_TOOLS + ["Task"],
+                    allowed_tools=allowed,
                     agents={
                         subagent_name: AgentDefinition(
                             description=sa["description"],
@@ -917,8 +969,10 @@ async def execute_subagent_task(task: dict, cycle_session: str):
                     },
                     permission_mode="bypassPermissions",
                     cwd=str(proactive_dir),
-                    max_turns=30,
+                    max_turns=sa_max_turns,
                 )
+                if mcp_configs:
+                    options.mcp_servers = mcp_configs
 
                 delegation_prompt = f"Use the {subagent_name} agent to execute this task:\n\n{task_prompt}"
 
@@ -934,7 +988,7 @@ async def execute_subagent_task(task: dict, cycle_session: str):
                         try:
                             msg = await asyncio.wait_for(
                                 agen.__anext__(),
-                                timeout=TASK_INACTIVITY_TIMEOUT,
+                                timeout=sa_inactivity,
                             )
                             last_activity = datetime.now()
                             yield msg
@@ -942,7 +996,7 @@ async def execute_subagent_task(task: dict, cycle_session: str):
                             idle = (datetime.now() - last_activity).total_seconds()
                             raise TimeoutError(
                                 f"Subagent '{subagent_name}' idle for {idle:.0f}s "
-                                f"(inactivity timeout: {TASK_INACTIVITY_TIMEOUT}s)"
+                                f"(inactivity timeout: {sa_inactivity}s)"
                             )
                         except StopAsyncIteration:
                             break
@@ -952,10 +1006,10 @@ async def execute_subagent_task(task: dict, cycle_session: str):
                         turn_count += 1
                         elapsed = (datetime.now() - task_start).total_seconds()
                         # Check total task timeout
-                        if elapsed > TASK_TIMEOUT:
+                        if elapsed > sa_timeout:
                             raise TimeoutError(
                                 f"Subagent '{subagent_name}' exceeded task timeout "
-                                f"({TASK_TIMEOUT}s, ran for {elapsed:.0f}s)"
+                                f"({sa_timeout}s, ran for {elapsed:.0f}s)"
                             )
                         for block in message.content:
                             if isinstance(block, TextBlock):
@@ -1043,34 +1097,69 @@ async def execute_subagent_task(task: dict, cycle_session: str):
 
         except TimeoutError as e:
             duration = (datetime.now() - task_start).total_seconds()
-            log.error(f"[Subagent '{subagent_name}' Task #{task_id}] TIMEOUT after {duration:.1f}s: {e}")
-            memory.update_task(task_id, status="failed", error=str(e))
-            memory.log_conversation(role="system", content=f"Subagent '{subagent_name}' Task #{task_id} TIMEOUT: {e}", session_id=session_id)
-            _broadcast_event("task_error", {
-                "session_id": session_id,
-                "task_id": task_id,
-                "task_title": task_title,
-                "subagent": subagent_name,
-                "error": str(e),
-                "duration_s": round(duration, 1),
-            })
-            send_task_notification(task_id=task_id, task_title=task_title, status="failed", result=f"TIMEOUT: {e}", duration=duration)
-            send_telegram_notification(task_id=task_id, task_title=task_title, status="failed", result=f"Timeout — ο agent κόλλησε μετά από {duration:.0f}s και τερματίστηκε αυτόματα.", duration=duration)
+            last_tool = tools_used[-1] if tools_used else "none"
+            last_text_preview = full_response[-1][:100] if full_response else "none"
+            diagnostic = f"Last tool: {last_tool} | Turns: {turn_count} | Last output: {last_text_preview}"
+            log.error(f"[Subagent '{subagent_name}' Task #{task_id}] TIMEOUT after {duration:.1f}s: {e}\n  {diagnostic}")
+
+            # Auto-retry if max_retries allows
+            meta = json.loads(task.get("metadata", "{}") or "{}")
+            retry_count = meta.get("retry_count", 0)
+            if retry_count < sa_max_retries:
+                meta["retry_count"] = retry_count + 1
+                memory.update_task(task_id, status="pending", error=f"Retry {retry_count + 1}/{sa_max_retries}: {e}")
+                with memory._conn() as conn:
+                    conn.execute("UPDATE tasks SET metadata=? WHERE id=?", (json.dumps(meta), task_id))
+                log.info(f"[Subagent '{subagent_name}' Task #{task_id}] Auto-retry {retry_count + 1}/{sa_max_retries}")
+                send_telegram_notification(task_id, task_title, "started",
+                    f"Timeout μετά από {duration:.0f}s — αυτόματο retry ({retry_count + 1}/{sa_max_retries})", duration)
+                wake_event.set()  # Wake daemon to pick up retried task
+            else:
+                memory.update_task(task_id, status="failed", error=f"{e} | {diagnostic}")
+                memory.log_conversation(role="system", content=f"Subagent '{subagent_name}' Task #{task_id} TIMEOUT: {e}\n{diagnostic}", session_id=session_id)
+                _broadcast_event("task_error", {
+                    "session_id": session_id,
+                    "task_id": task_id,
+                    "task_title": task_title,
+                    "subagent": subagent_name,
+                    "error": str(e),
+                    "diagnostic": diagnostic,
+                    "duration_s": round(duration, 1),
+                })
+                send_task_notification(task_id=task_id, task_title=task_title, status="failed", result=f"TIMEOUT: {e}", duration=duration)
+                tg_msg = f"Timeout μετά από {duration:.0f}s\nΤελευταίο tool: {last_tool}\nTurns: {turn_count}"
+                if sa_max_retries > 0:
+                    tg_msg += f"\nRetries: {retry_count}/{sa_max_retries} (εξαντλήθηκαν)"
+                send_telegram_notification(task_id=task_id, task_title=task_title, status="failed", result=tg_msg, duration=duration)
 
         except Exception as e:
             duration = (datetime.now() - task_start).total_seconds()
             log.error(f"[Subagent '{subagent_name}' Task #{task_id}] Error: {e}", exc_info=True)
-            memory.log_conversation(role="system", content=f"Subagent '{subagent_name}' Task #{task_id} ERROR: {e}", session_id=session_id)
-            _broadcast_event("task_error", {
-                "session_id": session_id,
-                "task_id": task_id,
-                "task_title": task_title,
-                "subagent": subagent_name,
-                "error": str(e),
-                "duration_s": round(duration, 1),
-            })
-            send_task_notification(task_id=task_id, task_title=task_title, status="failed", result=f"ERROR: {str(e)}", duration=duration)
-            send_telegram_notification(task_id=task_id, task_title=task_title, status="failed", result=f"ERROR: {str(e)}", duration=duration)
+
+            # Auto-retry for transient failures if max_retries allows
+            meta = json.loads(task.get("metadata", "{}") or "{}")
+            retry_count = meta.get("retry_count", 0)
+            if retry_count < sa_max_retries:
+                meta["retry_count"] = retry_count + 1
+                memory.update_task(task_id, status="pending", error=f"Retry {retry_count + 1}/{sa_max_retries}: {e}")
+                with memory._conn() as conn:
+                    conn.execute("UPDATE tasks SET metadata=? WHERE id=?", (json.dumps(meta), task_id))
+                log.info(f"[Subagent '{subagent_name}' Task #{task_id}] Auto-retry {retry_count + 1}/{sa_max_retries} after error: {e}")
+                send_telegram_notification(task_id, task_title, "started",
+                    f"Error: {str(e)[:100]} — αυτόματο retry ({retry_count + 1}/{sa_max_retries})", duration)
+                wake_event.set()
+            else:
+                memory.log_conversation(role="system", content=f"Subagent '{subagent_name}' Task #{task_id} ERROR: {e}", session_id=session_id)
+                _broadcast_event("task_error", {
+                    "session_id": session_id,
+                    "task_id": task_id,
+                    "task_title": task_title,
+                    "subagent": subagent_name,
+                    "error": str(e),
+                    "duration_s": round(duration, 1),
+                })
+                send_task_notification(task_id=task_id, task_title=task_title, status="failed", result=f"ERROR: {str(e)}", duration=duration)
+                send_telegram_notification(task_id=task_id, task_title=task_title, status="failed", result=f"ERROR: {str(e)}", duration=duration)
 
         finally:
             running_task_ids.discard(task_id)
@@ -1111,7 +1200,8 @@ def _extract_cli_from_description(description: str) -> dict:
         clean = token.rstrip('.,;:!?)')
         if clean.startswith('--') and len(clean) > 2:
             current_flag = clean
-            overrides[current_flag] = []
+            if current_flag not in overrides:
+                overrides[current_flag] = []
         elif current_flag and not _has_greek(token):
             overrides[current_flag].append(clean)
         else:
@@ -1188,6 +1278,7 @@ async def execute_script_task(task: dict, cycle_session: str):
             "type": "script",
             "started_at": task_start.isoformat(),
             "session_id": session_id,
+            "timeout": SCRIPT_TIMEOUT,
         }
         agent_status["state"] = "running"
 
@@ -1386,6 +1477,14 @@ async def run_agent_cycle(reason: str = "scheduled"):
     cycle_session = f"cycle_{cycle_start.strftime('%Y%m%d_%H%M%S')}"
     agent_status["last_cycle"] = cycle_start.isoformat()
 
+    # Increment cycle counter
+    prev_count = memory.kv_get("daemon_cycle_count", 0)
+    try:
+        prev_count = int(prev_count)
+    except (TypeError, ValueError):
+        prev_count = 0
+    memory.kv_set("daemon_cycle_count", prev_count + 1)
+
     log.info(f"=== Cycle [{reason}]: {cycle_session} ===")
     _broadcast_event("cycle_start", {"session_id": cycle_session, "reason": reason})
 
@@ -1512,7 +1611,6 @@ async def _maybe_run_heartbeat():
 
     # Time for a heartbeat
     log.info("HEARTBEAT: Starting proactive check")
-    memory.kv_set("last_heartbeat_at", datetime.now().isoformat())
 
     # Load heartbeat checklist if available
     heartbeat_checklist = ""
@@ -1558,14 +1656,23 @@ async def _maybe_run_heartbeat():
             )
             log.info(f"HEARTBEAT completed (OpenAI): {(result or '')[:200]}")
         else:
+            # Load auto-loaded MCP servers for heartbeat
+            mcp_configs, _ = _scan_mcp_servers()
+            hb_allowed = list(AGENT_TOOLS)
+            if mcp_configs:
+                hb_allowed += _build_mcp_tool_wildcards(mcp_configs)
+
             options = ClaudeAgentOptions(
                 system_prompt=_get_daemon_prompt(),
-                allowed_tools=AGENT_TOOLS,
+                allowed_tools=hb_allowed,
                 setting_sources=["user", "project"],
                 permission_mode="bypassPermissions",
                 cwd=str(proactive_dir),
                 max_turns=10,
             )
+            if mcp_configs:
+                options.mcp_servers = mcp_configs
+
             response_parts = []
             async for message in query(prompt=heartbeat_prompt, options=options):
                 if isinstance(message, AssistantMessage):
@@ -1574,8 +1681,15 @@ async def _maybe_run_heartbeat():
                             response_parts.append(block.text)
             log.info(f"HEARTBEAT completed (Claude): {''.join(response_parts)[:200]}")
 
+        # Only record timestamp AFTER successful execution
+        memory.kv_set("last_heartbeat_at", datetime.now().isoformat())
+
     except Exception as e:
         log.error(f"HEARTBEAT failed: {e}", exc_info=True)
+        # Set retry timestamp 15 minutes from now instead of full interval
+        retry_at = datetime.now() - timedelta(hours=interval_hours) + timedelta(minutes=15)
+        memory.kv_set("last_heartbeat_at", retry_at.isoformat())
+        log.info(f"HEARTBEAT will retry after {retry_at.isoformat()}")
 
 
 # ─────────────────────────────────────────────────────────
@@ -1659,15 +1773,71 @@ class TaskResponse(BaseModel):
     message: str
 
 
+async def _watchdog_loop():
+    """Safety net: kill tasks that exceed timeout even if asyncio.wait_for didn't fire.
+
+    Runs every 30s, checks all running tasks against their effective timeout + 20% grace.
+    """
+    log.info("Watchdog started (30s interval)")
+    while True:
+        await asyncio.sleep(30)
+        now = datetime.now()
+        for task_id, info in list(agent_status["running_tasks"].items()):
+            try:
+                started = datetime.fromisoformat(info["started_at"])
+                elapsed = (now - started).total_seconds()
+                effective_timeout = info.get("timeout", TASK_TIMEOUT)
+                hard_limit = effective_timeout * 1.2  # 20% grace period
+                if elapsed > hard_limit:
+                    log.error(f"WATCHDOG: Task #{task_id} force-killed ({elapsed:.0f}s > {hard_limit:.0f}s hard limit)")
+                    atask = running_asyncio_tasks.get(task_id)
+                    if atask and not atask.done():
+                        atask.cancel()
+                    # Mark failed if still in_progress
+                    t = memory.get_task(task_id)
+                    if t and t["status"] == "in_progress":
+                        memory.update_task(task_id, status="failed",
+                            error=f"Watchdog: exceeded {hard_limit:.0f}s hard limit ({elapsed:.0f}s elapsed)")
+                        send_telegram_notification(task_id, info.get("title", "?"), "failed",
+                            f"Watchdog — ξεπέρασε {hard_limit:.0f}s, τερματίστηκε αυτόματα", elapsed)
+            except Exception as e:
+                log.warning(f"WATCHDOG: Error checking task #{task_id}: {e}")
+
+
+def _cleanup_stale_tasks():
+    """Reset any tasks stuck in in_progress from a previous daemon crash."""
+    try:
+        with memory._conn() as conn:
+            stale_tasks = conn.execute(
+                "SELECT id, title FROM tasks WHERE status='in_progress'"
+            ).fetchall()
+        for t in stale_tasks:
+            log.warning(f"Startup cleanup: Task #{t['id']} '{t['title']}' was in_progress — resetting to pending")
+            memory.update_task(t["id"], status="pending")
+        if stale_tasks:
+            log.info(f"Startup cleanup: reset {len(stale_tasks)} stale task(s) to pending")
+    except Exception as e:
+        log.error(f"Startup cleanup failed: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Start the scheduler as a background task
+    # Clean up stale tasks from previous crash
+    _cleanup_stale_tasks()
+
+    # Start the scheduler and watchdog as background tasks
     scheduler_task = asyncio.create_task(scheduler_loop())
+    watchdog_task = asyncio.create_task(_watchdog_loop())
     log.info(f"API server starting on port {API_PORT}")
     yield
+    watchdog_task.cancel()
     scheduler_task.cancel()
     try:
         await scheduler_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await watchdog_task
     except asyncio.CancelledError:
         pass
 
@@ -1723,17 +1893,44 @@ async def add_task(req: TaskRequest):
 
 @app.get("/status")
 async def get_status():
-    """Current daemon state + task statistics."""
+    """Current daemon state + task statistics + per-task health info."""
     stats = memory.get_task_stats()
+    now = datetime.now()
+
+    # Enrich running_tasks with elapsed/remaining time
+    running_detail = {}
+    for tid, info in agent_status["running_tasks"].items():
+        try:
+            started = datetime.fromisoformat(info["started_at"])
+            elapsed = (now - started).total_seconds()
+            timeout = info.get("timeout", TASK_TIMEOUT)
+            running_detail[str(tid)] = {
+                **info,
+                "elapsed_s": round(elapsed, 1),
+                "timeout_s": timeout,
+                "remaining_s": round(max(0, timeout - elapsed), 1),
+            }
+        except Exception:
+            running_detail[str(tid)] = info
+
     return {
-        "agent": agent_status,
+        "agent": {
+            "state": agent_status["state"],
+            "running_tasks": running_detail,
+            "last_cycle": agent_status["last_cycle"],
+        },
         "tasks": stats,
         "daemon": {
             "check_interval": CHECK_INTERVAL,
             "max_tasks_per_cycle": MAX_TASKS_PER_CYCLE,
             "max_concurrent_tasks": MAX_CONCURRENT_TASKS,
+            "task_timeout": TASK_TIMEOUT,
+            "task_inactivity_timeout": TASK_INACTIVITY_TIMEOUT,
+            "script_timeout": SCRIPT_TIMEOUT,
             "uptime_since": memory.kv_get("daemon_last_start"),
             "total_cycles": memory.kv_get("daemon_cycle_count", 0),
+            "watchdog": "active",
+            "mcp_servers": list(_scan_mcp_servers()[0].keys()),
         },
     }
 
@@ -1968,11 +2165,12 @@ async def run_daemon():
     os.environ.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "0")
     memory.kv_set("daemon_last_start", datetime.now().isoformat())
     memory.kv_set("daemon_status", "running")
-    log.info("Agent Daemon starting (parallel execution)")
+    log.info("Agent Daemon starting (parallel execution + watchdog)")
     log.info(f"   API: http://localhost:{API_PORT}")
     log.info(f"   Interval: {CHECK_INTERVAL}s")
     log.info(f"   Max concurrent: {MAX_CONCURRENT_TASKS}")
     log.info(f"   Max tasks/cycle: {MAX_TASKS_PER_CYCLE}")
+    log.info(f"   Task timeout: {TASK_TIMEOUT}s, inactivity: {TASK_INACTIVITY_TIMEOUT}s, script: {SCRIPT_TIMEOUT}s")
     log.info(f"   Database: {memory.db_path}")
     config = _uv.Config(app, host="0.0.0.0", port=API_PORT, log_level="info")
     server = _uv.Server(config)

@@ -59,6 +59,11 @@ Subagent commands:
 Task folder commands:
   task_folder <id>                  - Get/create task folder path
 
+MCP server commands:
+  mcp_servers                       - List installed MCP servers
+  mcp_server_content <name>         - Get full SERVER.md content
+  create_mcp_server <name> <desc> <server_code> - Create a new MCP server
+
 Daemon control commands:
   running_tasks                     - List currently executing tasks
   cancel_task <id>                  - Cancel a running task/subagent
@@ -704,6 +709,79 @@ def main():
         task_id = int(sys.argv[2])
         folder = memory.get_task_folder(task_id)
         print(str(folder))
+
+    # ── MCP server commands ───────────────────────────────
+
+    elif cmd == "mcp_servers":
+        from agelclaw.project import get_mcp_servers_dir
+        mcp_dir = get_mcp_servers_dir()
+        if not mcp_dir.exists():
+            print("No MCP servers installed.")
+        else:
+            for d in sorted(mcp_dir.iterdir()):
+                if not d.is_dir():
+                    continue
+                md = d / "SERVER.md"
+                if not md.exists():
+                    continue
+                content = md.read_text(encoding="utf-8", errors="replace")
+                import re as _re
+                desc = ""
+                auto = False
+                fm = _re.search(r'^---\s*\n(.*?)\n---', content, _re.DOTALL)
+                if fm:
+                    dm = _re.search(r'description:\s*(.+)', fm.group(1))
+                    if dm:
+                        desc = dm.group(1).strip().strip('"\'')[:100]
+                    al = _re.search(r'auto_load:\s*(true|false)', fm.group(1), _re.IGNORECASE)
+                    if al:
+                        auto = al.group(1).lower() == "true"
+                entry = f"  {d.name}"
+                if desc:
+                    entry += f": {desc}"
+                if auto:
+                    entry += " [auto-loaded]"
+                print(entry)
+
+    elif cmd == "mcp_server_content":
+        name = sys.argv[2]
+        from agelclaw.project import get_mcp_servers_dir
+        mcp_dir = get_mcp_servers_dir()
+        md = mcp_dir / name / "SERVER.md"
+        if md.exists():
+            print(md.read_text(encoding="utf-8", errors="replace"))
+        else:
+            print(f"MCP server '{name}' not found at {md}")
+
+    elif cmd == "create_mcp_server":
+        name = sys.argv[2]
+        desc = sys.argv[3]
+        server_code = sys.argv[4]
+        from agelclaw.project import get_mcp_servers_dir
+        mcp_dir = get_mcp_servers_dir()
+        srv_dir = mcp_dir / name
+        srv_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create SERVER.md
+        server_md = (
+            "---\n"
+            f"name: {name}\n"
+            f"description: {desc}\n"
+            "version: 1.0.0\n"
+            "command: python\n"
+            "args: [server.py]\n"
+            "auto_load: false\n"
+            "scope: all\n"
+            "tools:\n"
+            "  - example_tool\n"
+            "---\n\n"
+            f"# {name} MCP Server\n\n"
+            f"{desc}\n"
+        )
+        (srv_dir / "SERVER.md").write_text(server_md, encoding="utf-8")
+        (srv_dir / "server.py").write_text(server_code, encoding="utf-8")
+        print(f"MCP server '{name}' created at {srv_dir}")
+        print(f"Edit {srv_dir / 'SERVER.md'} to configure tools list and auto_load setting.")
 
     else:
         print(f"Unknown command: {cmd}")

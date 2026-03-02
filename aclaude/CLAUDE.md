@@ -92,6 +92,10 @@ agelclaw-mem create_subagent <name> "desc" "body" [provider] [task_type] [tools_
 agelclaw-mem add_subagent_script <name> <file> "code" | add_subagent_ref <name> <file> "content"
 agelclaw-mem add_subagent_task <subagent> "title" "desc" [pri] [due_at] [recurring]
 agelclaw-mem subagent_tasks <name> [status] [limit] | subagent_stats <name>
+
+# MCP Servers
+agelclaw-mem mcp_servers | mcp_server_content <name>
+agelclaw-mem create_mcp_server <name> "desc" "server_code"
 ```
 
 ## Architecture
@@ -158,7 +162,8 @@ proactive/src/agelclaw/           # Python package (pip install)
 │   └── openai_tools.py           # Function tools for OpenAI (bash, read, write, glob, grep)
 └── data/                         # Bundled package data (immutable)
     ├── react_dist/               # Pre-built React chat UI
-    ├── skills/                   # 16 bundled skills (pdf, xlsx, pptx, email, skill-creator, subagent-creator, etc.)
+    ├── skills/                   # 15 bundled skills (pdf, xlsx, pptx, email, skill-creator, subagent-creator, etc.)
+    ├── mcp_servers/              # Bundled MCP servers (memory-tools auto-loaded)
     └── templates/                # Config + persona templates copied on init
 ```
 
@@ -173,6 +178,7 @@ proactive/src/agelclaw/           # Python package (pip install)
 ├── logs/daemon.log               # Daemon execution logs
 ├── tasks/task_<id>/              # Per-task output folders (task_info.json, result.md, artifacts)
 ├── subagents/<name>/SUBAGENT.md  # Subagent definitions (YAML frontmatter + instructions)
+├── mcp_servers/<name>/           # MCP server definitions (SERVER.md + server.py)
 ├── persona/                      # Agent personality & onboarding
 │   ├── SOUL.md, IDENTITY.md     # Core values, name/vibe (loaded into every system prompt)
 │   ├── BOOTSTRAP.md              # First-run onboarding (auto-deleted after completion)
@@ -196,11 +202,23 @@ proactive/src/agelclaw/           # Python package (pip install)
 
 **YAML config + env var overrides.** `core/config.py` loads `config.yaml`, maps keys to env vars (e.g. `anthropic_api_key` → `ANTHROPIC_API_KEY`). Env vars win. Singleton with `load_config(force_reload=True)`.
 
-**Non-streaming SDK on Windows.** Claude Agent SDK streaming has initialization timeouts on Windows. All services use non-streaming `query(prompt=string)`. MCP tools replaced by `agelclaw-mem` CLI called via Bash.
+**Non-streaming SDK on Windows.** Claude Agent SDK streaming has initialization timeouts on Windows. All services use non-streaming `query(prompt=string)`. SDK-created MCP servers require streaming, but **external stdio MCP servers work** in `--print` mode.
+
+**MCP Marketplace.** Standalone MCP server directory `mcp_servers/<name>/` (SERVER.md + server.py). `auto_load: true` servers loaded for all queries. Subagents reference additional servers via `mcp_servers:` in SUBAGENT.md. Tool pattern: `mcp__{server}__{tool}`. `agent_config.py` has `_scan_mcp_servers()` (returns configs + prompt text), `load_mcp_server_config(name)` (per-server loading), `_build_mcp_tool_wildcards()` (builds `mcp__name__*` entries). `build_agent_options()` automatically includes auto-loaded MCP servers. Daemon passes MCP configs to all task types (global, subagent, heartbeat).
+
+**memory-tools MCP server.** Bundled auto-loaded MCP server that provides native tool access to all `agelclaw-mem` operations: tasks (pending, due, stats, add_task, complete_task), learnings, profile, skills, subagents. Replaces `Bash("agelclaw-mem <cmd>")` with direct `mcp__memory-tools__<cmd>` calls — 1 tool call instead of 4. Agent can still use `agelclaw-mem` via Bash as fallback.
 
 **Task execution safety (anti-double-run).** Daemon marks tasks as `in_progress` in the database BEFORE launching the query. `get_pending_tasks()` only returns `status='pending'`. After query finishes, a safety net checks if the agent called `complete_task`; if not, the daemon marks it completed itself.
 
-**Task timeouts.** `task_timeout` (default 300s) limits total task duration. `task_inactivity_timeout` (default 120s) kills tasks that stop producing messages. On timeout, task is marked `failed` with Telegram notification.
+**Task timeouts.** `task_timeout` (default 900s) limits total task duration. `task_inactivity_timeout` (default 360s) kills tasks that stop producing messages. On timeout, task is marked `failed` with diagnostic info (last tool, turn count, last output) and Telegram notification. All timeout defaults are in `core/config.py` with env var overrides.
+
+**Per-subagent timeout overrides.** SUBAGENT.md YAML frontmatter supports `timeout`, `inactivity_timeout`, `max_turns`, and `max_retries` fields. These override global defaults for that subagent. Example: `timeout: 1800` gives a subagent 30 minutes instead of the default 15.
+
+**Watchdog safety net.** `_watchdog_loop()` runs every 30s as a background coroutine. It checks all running tasks against their effective timeout + 20% grace period. If a task exceeds the hard limit (timeout failed to fire), the watchdog force-cancels it, marks it failed, and sends a Telegram notification. Started automatically in daemon lifespan.
+
+**Stale task cleanup on startup.** When the daemon starts, `_cleanup_stale_tasks()` queries for any tasks stuck in `in_progress` (from a previous crash) and resets them to `pending`. This prevents tasks from being permanently stuck after a daemon restart.
+
+**Auto-retry for failed tasks.** Subagents can specify `max_retries` in SUBAGENT.md frontmatter (default 0). When a task fails (timeout or exception) and retries remain, the daemon resets it to `pending` with incremented `retry_count` in task metadata, then wakes the scheduler. Telegram notification includes retry status.
 
 **Tool hallucination guard.** System prompt explicitly lists the ONLY available tools and warns against using non-existent tools (e.g. `TodoWrite`, `Task`, `TodoRead`) which cause the agent to freeze waiting for a response that never comes.
 
@@ -247,8 +265,9 @@ daemon_port: 8420
 cost_limit_daily: 10.00
 max_concurrent_tasks: 3
 check_interval: 300               # Seconds between daemon cycles
-task_timeout: 300                 # Max seconds per task (5 min)
-task_inactivity_timeout: 120      # Kill task if no activity for 2 min
+task_timeout: 900                 # Max seconds per task (15 min)
+task_inactivity_timeout: 360      # Kill task if no activity for 6 min
+script_timeout: 7200              # Max seconds for direct script tasks (2 hours)
 telegram_bot_token: ""
 telegram_allowed_users: ""        # Comma-separated Telegram user IDs (empty = allow all)
 heartbeat_enabled: false

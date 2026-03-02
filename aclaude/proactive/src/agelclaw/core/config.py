@@ -34,6 +34,9 @@ _ENV_MAP = {
     "cost_limit_daily": "AGENT_COST_LIMIT_DAILY",
     "max_concurrent_tasks": "AGENT_MAX_CONCURRENT",
     "check_interval": "AGENT_CHECK_INTERVAL",
+    "task_timeout": "AGENT_TASK_TIMEOUT",
+    "task_inactivity_timeout": "AGENT_TASK_INACTIVITY_TIMEOUT",
+    "script_timeout": "AGENT_SCRIPT_TIMEOUT",
     "outlook_client_id": "OUTLOOK_CLIENT_ID",
     "outlook_client_secret": "OUTLOOK_CLIENT_SECRET",
     "outlook_tenant_id": "OUTLOOK_TENANT_ID",
@@ -47,6 +50,9 @@ _TYPE_MAP = {
     "cost_limit_daily": float,
     "max_concurrent_tasks": int,
     "check_interval": int,
+    "task_timeout": int,
+    "task_inactivity_timeout": int,
+    "script_timeout": int,
 }
 
 
@@ -123,6 +129,9 @@ def _get_default(key: str) -> Any:
         "cost_limit_daily": 10.0,
         "max_concurrent_tasks": 3,
         "check_interval": 300,
+        "task_timeout": 900,
+        "task_inactivity_timeout": 360,
+        "script_timeout": 7200,
         "outlook_client_id": "",
         "outlook_client_secret": "",
         "outlook_tenant_id": "",

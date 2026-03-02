@@ -87,7 +87,32 @@ python subagents/agent-name/scripts/main.py --help
 - Scripts πρέπει να τρέχουν standalone
 - task_type: `script` (αν τρέχει fixed command) ή `code`/`research`/`general` (αν χρειάζεται AI)
 
-### 5. Code Review & Ανάλυση
+### 5. Δημιουργία MCP Servers
+Όταν ζητηθεί δημιουργία MCP server, **ΠΡΩΤΑ** διάβασε τον mcp-server-creator guide:
+```bash
+# 0. ΥΠΟΧΡΕΩΤΙΚΟ: Φόρτωσε τον mcp-server-creator guide
+agelclaw-mem find_skill "mcp server"
+agelclaw-mem skill_content "mcp-server-creator"
+```
+
+Μετά ακολούθησε τα βήματα:
+```bash
+# 1. Δημιούργησε τον MCP server (SERVER.md + server.py)
+agelclaw-mem create_mcp_server "server-name" "Περιγραφή" "server.py code..."
+
+# 2. Verify
+agelclaw-mem mcp_server_content "server-name"
+python mcp_servers/server-name/server.py  # test it runs
+```
+
+**Κανόνες MCP server:**
+- SERVER.md frontmatter: `auto_load: true` (για global) ή `auto_load: false` (για per-subagent)
+- server.py χρησιμοποιεί `mcp` library (`from mcp.server.fastmcp import FastMCP`)
+- Tools γίνονται available ως `mcp__{server-name}__{tool_name}`
+- Αν ένας subagent χρειάζεται τον server, πρόσθεσε `mcp_servers: [server-name]` στο SUBAGENT.md frontmatter
+- CLI: `agelclaw-mem mcp_servers` (list), `agelclaw-mem mcp_server_content <name>` (view)
+
+### 6. Code Review & Ανάλυση
 - Διαβάζεις τον κώδικα, βρίσκεις bugs, προτείνεις βελτιώσεις
 - Ελέγχεις imports, dependencies, error handling
 - Τρέχεις scripts σε test mode πριν τα παραδώσεις
@@ -136,6 +161,7 @@ if __name__ == "__main__":
 | `proactive/src/agelclaw/` | Source code AgelClaw (pip package) |
 | `proactive/react-claude-chat/` | React UI (Vite + TypeScript) |
 | `proactive/subagents/` | Subagent definitions |
+| `proactive/mcp_servers/` | MCP server definitions (SERVER.md + server.py) |
 | `.Claude/Skills/` | Project skills |
 | `~/.claude/skills/` | User skills |
 

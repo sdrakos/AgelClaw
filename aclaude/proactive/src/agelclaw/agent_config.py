@@ -15,7 +15,7 @@ from claude_agent_sdk import ClaudeAgentOptions
 from agelclaw.core.config import load_config
 from agelclaw.core.agent_router import AgentRouter, Provider
 
-from agelclaw.project import get_project_dir, get_db_path, get_skills_dir, get_subagents_dir, get_persona_dir
+from agelclaw.project import get_project_dir, get_db_path, get_skills_dir, get_subagents_dir, get_persona_dir, get_mcp_servers_dir
 
 PROACTIVE_DIR = get_project_dir()
 SHARED_SESSION_ID = "shared_chat"
@@ -37,8 +37,9 @@ You execute work YOURSELF — reading files, writing code, searching the web, ma
 You have: Read, Write, Edit, Bash, Glob, Grep, WebSearch, WebFetch, Skill.
 Use them directly. Do NOT tell the user to run commands — run them yourself.
 
-## MEMORY & SKILL CLI
-Use `agelclaw-mem <command>` via Bash for ALL memory and skill operations:
+## MEMORY & SKILL TOOLS
+**PREFERRED**: Use `mcp__memory-tools__<tool>` MCP tools for memory operations (faster, native).
+**FALLBACK**: Use `agelclaw-mem <command>` via Bash if MCP tools are not available.
 
 ### Memory commands:
   agelclaw-mem context                          # Full context summary
@@ -463,9 +464,229 @@ def _scan_installed_skills() -> str:
     return header + "\n".join(skills_text)
 
 
+import sys as _sys
 import time as _time
 _prompt_cache = {"text": None, "ts": 0}
 _PROMPT_CACHE_TTL = 120  # seconds — rebuild every 2 min
+
+# MCP server config cache (rebuilt with prompt cache)
+_mcp_cache: dict = {"configs": {}, "prompt": "", "ts": 0}
+
+
+def _scan_mcp_servers() -> tuple[dict, str]:
+    """Scan mcp_servers/ directories and return (mcp_configs, prompt_text).
+
+    Returns:
+        mcp_configs: Dict of {server_name: McpStdioServerConfig} for ClaudeAgentOptions.
+                     Only servers with auto_load: true are included.
+        prompt_text: Text block listing available MCP servers for system prompt.
+    """
+    import re as _re
+
+    now = _time.time()
+    if _mcp_cache["configs"] and (now - _mcp_cache["ts"]) < _PROMPT_CACHE_TTL:
+        return dict(_mcp_cache["configs"]), _mcp_cache["prompt"]
+
+    mcp_root = get_mcp_servers_dir()
+    if not mcp_root.exists():
+        return {}, ""
+
+    configs = {}
+    entries = []
+
+    for server_dir in sorted(mcp_root.iterdir()):
+        if not server_dir.is_dir():
+            continue
+        server_md = server_dir / "SERVER.md"
+        if not server_md.exists():
+            continue
+
+        try:
+            content = server_md.read_text(encoding="utf-8", errors="replace").strip()
+
+            # Parse YAML frontmatter
+            fm_match = _re.search(r'^---\s*\n(.*?)\n---', content, _re.DOTALL)
+            if not fm_match:
+                continue
+            fm = fm_match.group(1)
+
+            name = server_dir.name
+            desc = ""
+            command = ""
+            args = []
+            env = {}
+            auto_load = False
+            tools_list = []
+
+            # Extract fields
+            n = _re.search(r'name:\s*(\S+)', fm)
+            if n:
+                name = n.group(1).strip()
+
+            d = _re.search(r'description:\s*(.+)', fm)
+            if d:
+                desc = d.group(1).strip().strip('"\'')
+
+            c = _re.search(r'command:\s*(.+)', fm)
+            if c:
+                command = c.group(1).strip()
+
+            # args as YAML list
+            a_match = _re.search(r'args:\s*\[([^\]]*)\]', fm)
+            if a_match:
+                args = [x.strip().strip('"\'') for x in a_match.group(1).split(",") if x.strip()]
+
+            # auto_load
+            al = _re.search(r'auto_load:\s*(true|false)', fm, _re.IGNORECASE)
+            if al:
+                auto_load = al.group(1).lower() == "true"
+
+            # tools list
+            tools_block = _re.search(r'tools:\s*\n((?:\s+-\s+.+\n?)+)', fm)
+            if tools_block:
+                tools_list = [
+                    line.strip().lstrip("- ").strip()
+                    for line in tools_block.group(1).strip().split("\n")
+                    if line.strip().startswith("-")
+                ]
+
+            # env vars — simple key: value pairs
+            env_block = _re.search(r'env:\s*\n((?:\s+\S+:\s+.+\n?)+)', fm)
+            if env_block:
+                for line in env_block.group(1).strip().split("\n"):
+                    kv = line.strip().split(":", 1)
+                    if len(kv) == 2:
+                        val = kv[1].strip().strip('"\'')
+                        # Resolve ${VAR} references from os.environ
+                        import os
+                        if val.startswith("${") and val.endswith("}"):
+                            val = os.environ.get(val[2:-1], "")
+                        env[kv[0].strip()] = val
+
+            if not command:
+                continue
+
+            # Resolve relative paths for server script
+            resolved_args = []
+            for arg in args:
+                arg_path = server_dir / arg
+                if arg_path.exists():
+                    resolved_args.append(str(arg_path))
+                else:
+                    resolved_args.append(arg)
+
+            # Resolve 'python' → sys.executable for reliability
+            if command in ("python", "python3"):
+                command = _sys.executable
+
+            # Build McpStdioServerConfig dict
+            server_config = {"command": command, "args": resolved_args}
+            if env:
+                server_config["env"] = env
+
+            if auto_load:
+                configs[name] = server_config
+
+            # Build prompt entry
+            tool_names = [f"`mcp__{name}__{t}`" for t in tools_list] if tools_list else []
+            entry = f"- **{name}**"
+            if desc:
+                entry += f": {desc[:120]}"
+            if auto_load:
+                entry += " (auto-loaded)"
+            if tool_names:
+                entry += f"\n  Tools: {', '.join(tool_names[:8])}"
+                if len(tool_names) > 8:
+                    entry += f" (+{len(tool_names)-8} more)"
+            entries.append(entry)
+
+        except Exception:
+            continue
+
+    prompt = ""
+    if entries:
+        prompt = "\n\n## INSTALLED MCP SERVERS\n"
+        prompt += "Native tool servers loaded automatically. Use `mcp__{server}__{tool}` tool names.\n"
+        prompt += "Run `agelclaw-mem mcp_servers` for full list.\n\n"
+        prompt += "\n".join(entries)
+
+    _mcp_cache["configs"] = configs
+    _mcp_cache["prompt"] = prompt
+    _mcp_cache["ts"] = now
+
+    return dict(configs), prompt  # Return copy to prevent mutation of cache
+
+
+def _build_mcp_tool_wildcards(mcp_configs: dict) -> list[str]:
+    """Build wildcard allowed_tools entries for MCP servers.
+
+    Returns e.g. ["mcp__memory-tools__*", "mcp__weather-api__*"]
+    """
+    return [f"mcp__{name}__*" for name in mcp_configs]
+
+
+def load_mcp_server_config(name: str) -> dict | None:
+    """Load a specific MCP server config by name. Used by daemon for per-subagent loading."""
+    import re as _re
+
+    mcp_root = get_mcp_servers_dir()
+    server_dir = mcp_root / name
+    server_md = server_dir / "SERVER.md"
+    if not server_md.exists():
+        return None
+
+    try:
+        content = server_md.read_text(encoding="utf-8", errors="replace").strip()
+        fm_match = _re.search(r'^---\s*\n(.*?)\n---', content, _re.DOTALL)
+        if not fm_match:
+            return None
+        fm = fm_match.group(1)
+
+        command = ""
+        args = []
+        env = {}
+
+        c = _re.search(r'command:\s*(.+)', fm)
+        if c:
+            command = c.group(1).strip()
+
+        a_match = _re.search(r'args:\s*\[([^\]]*)\]', fm)
+        if a_match:
+            args = [x.strip().strip('"\'') for x in a_match.group(1).split(",") if x.strip()]
+
+        env_block = _re.search(r'env:\s*\n((?:\s+\S+:\s+.+\n?)+)', fm)
+        if env_block:
+            import os
+            for line in env_block.group(1).strip().split("\n"):
+                kv = line.strip().split(":", 1)
+                if len(kv) == 2:
+                    val = kv[1].strip().strip('"\'')
+                    if val.startswith("${") and val.endswith("}"):
+                        val = os.environ.get(val[2:-1], "")
+                    env[kv[0].strip()] = val
+
+        if not command:
+            return None
+
+        # Resolve args
+        resolved_args = []
+        for arg in args:
+            arg_path = server_dir / arg
+            if arg_path.exists():
+                resolved_args.append(str(arg_path))
+            else:
+                resolved_args.append(arg)
+
+        if command in ("python", "python3"):
+            command = _sys.executable
+
+        config = {"command": command, "args": resolved_args}
+        if env:
+            config["env"] = env
+        return config
+
+    except Exception:
+        return None
 
 
 def _load_persona_files() -> str:
@@ -512,7 +733,7 @@ def _check_bootstrap() -> str:
 
 
 def get_system_prompt() -> str:
-    """Build the full system prompt with persona, skills, subagents, and hard rules.
+    """Build the full system prompt with persona, skills, subagents, MCP servers, and hard rules.
     Cached for 120s to avoid filesystem scanning on every message."""
     now = _time.time()
     if _prompt_cache["text"] and (now - _prompt_cache["ts"]) < _PROMPT_CACHE_TTL:
@@ -520,12 +741,14 @@ def get_system_prompt() -> str:
 
     from agelclaw.memory import Memory
     mem = Memory()
+    _, mcp_prompt = _scan_mcp_servers()
     result = (
         _load_persona_files()
         + _check_bootstrap()
         + _SYSTEM_PROMPT_BASE
         + _scan_installed_skills()
         + _scan_installed_subagents()
+        + mcp_prompt
         + mem.build_rules_prompt()
     )
     _prompt_cache["text"] = result
@@ -652,28 +875,48 @@ def get_system_prompt_for_channel(channel_type: str = "private") -> str:
     In private/web/daemon mode: full system prompt with persona.
     """
     if channel_type == "group":
-        # Group mode: base prompt + skills + subagents + rules, but NO persona files
+        # Group mode: base prompt + skills + subagents + MCP + rules, but NO persona files
         from agelclaw.memory import Memory
         mem = Memory()
+        _, mcp_prompt = _scan_mcp_servers()
         return (
             _SYSTEM_PROMPT_BASE
             + _scan_installed_skills()
             + _scan_installed_subagents()
+            + mcp_prompt
             + mem.build_rules_prompt()
         )
     return get_system_prompt()
 
 
-def build_agent_options(max_turns: int = 30, channel_type: str = "private") -> ClaudeAgentOptions:
-    """Build ClaudeAgentOptions for chat/telegram agents (full tool set)."""
-    return ClaudeAgentOptions(
+def build_agent_options(max_turns: int = 30, channel_type: str = "private",
+                        extra_mcp_servers: dict | None = None) -> ClaudeAgentOptions:
+    """Build ClaudeAgentOptions for chat/telegram agents (full tool set).
+
+    Args:
+        max_turns: Maximum agent loop iterations.
+        channel_type: "private", "web", "group", or "daemon".
+        extra_mcp_servers: Additional MCP server configs to merge (e.g. per-subagent).
+    """
+    mcp_configs, _ = _scan_mcp_servers()
+    if extra_mcp_servers:
+        mcp_configs = {**mcp_configs, **extra_mcp_servers}
+
+    allowed = list(AGENT_TOOLS)
+    if mcp_configs:
+        allowed += _build_mcp_tool_wildcards(mcp_configs)
+
+    opts = ClaudeAgentOptions(
         system_prompt=get_system_prompt_for_channel(channel_type),
-        allowed_tools=AGENT_TOOLS,
+        allowed_tools=allowed,
         setting_sources=["user", "project"],
         permission_mode="bypassPermissions",
         cwd=str(PROACTIVE_DIR),
         max_turns=max_turns,
     )
+    if mcp_configs:
+        opts.mcp_servers = mcp_configs
+    return opts
 
 
 def get_router() -> AgentRouter:
