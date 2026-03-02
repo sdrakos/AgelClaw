@@ -118,6 +118,14 @@ pm2 logs && pm2 monit
 # ── Build release ──
 cd proactive
 python build_release.py          # Creates versioned zip for GitHub release
+
+# ── Build Windows installer ──
+pip install nuitka ordered-set zstandard   # Prerequisites
+cd proactive
+python build_installer.py                  # Full build: Nuitka + embed + Inno Setup
+python build_installer.py --skip-nuitka    # Re-run Inno Setup only (reuse compiled dist)
+python build_installer.py --skip-inno      # Nuitka compile only, no installer
+# Output: build/installer/AgelClaw-Setup-3.1.0.exe
 ```
 
 ## Architecture
@@ -166,6 +174,7 @@ proactive/src/agelclaw/           # Python package (pip install)
 ├── daemon.py                     # FastAPI :8420 (scheduler, parallel tasks, SSE, notifications)
 ├── telegram_bot.py               # Telegram bot interface
 ├── agent_config.py               # System prompt, AGENT_TOOLS, build_agent_options(), get_agent(), get_router()
+├── _nuitka_compat.py             # Compiled-mode compatibility (IS_COMPILED, path helpers)
 ├── agent_run.py                  # Dev: start all services concurrently
 ├── memory.py                     # SQLite WAL: tasks, conversations, learnings, kv_store, user_profile
 ├── memory_tools.py               # MCP tools for memory operations
@@ -189,6 +198,12 @@ proactive/src/agelclaw/           # Python package (pip install)
     ├── mcp_servers/              # Bundled MCP servers (copied to project on init)
     │   └── memory-tools/         # Native MCP tools for memory/tasks/skills (auto-loaded)
     └── templates/                # Config + persona templates copied on init
+
+# Build & installer files (not part of pip package):
+build_installer.py                # Build orchestrator: Nuitka + Python embed + Inno Setup
+installer.iss                     # Inno Setup script (wizard, PATH, shortcuts, Claude CLI)
+assets/icon.ico                   # Application icon for exe and installer
+INSTALLER_MANUAL.md               # Detailed manual for the Windows installer pipeline
         ├── config.yaml.example
         ├── .env.example
         ├── ecosystem.config.js
@@ -267,6 +282,8 @@ proactive/src/agelclaw/           # Python package (pip install)
 **Telegram allowlist.** `telegram_allowed_users` in config.yaml — comma-separated user IDs. Empty = allow all. Checked by `is_authorized()` in `telegram_bot.py`.
 
 **Telegram terminal logging.** `telegram_bot.py` logs detailed agent activity to the terminal: `[Query start]` with user message, `[Tool #N]` with tool name and arguments (Bash commands, file paths, search queries), `[Agent]` with text output preview, `[Query done]` with elapsed time and response preview, `[Sending]` with chunk count. Enables real-time monitoring of what the agent is doing.
+
+**Windows installer (Nuitka + Inno Setup).** `build_installer.py` compiles the package with Nuitka `--standalone` → `AgelClaw.exe`, copies it as `AgelClaw-Mem.exe` (filename-based dispatch to `mem_cli`), downloads Python 3.12 embeddable for MCP server scripts, and runs Inno Setup to produce `AgelClaw-Setup-{version}.exe`. All runtime changes are in `_nuitka_compat.py` behind `IS_COMPILED` guards — dev mode (`pip install -e .`) is 100% unchanged. Claude Code CLI is installed during setup via `npm install -g @anthropic-ai/claude-code` (not bundled). See `INSTALLER_MANUAL.md` for full details.
 
 **Telegram notification splitting.** Daemon's `send_telegram_notification()` splits long results into multiple messages (4096 char limit per message) instead of truncating at 400 chars. First message includes the task title header, subsequent messages are continuation text.
 

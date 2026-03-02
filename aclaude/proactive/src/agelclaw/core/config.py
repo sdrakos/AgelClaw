@@ -41,6 +41,7 @@ _ENV_MAP = {
     "outlook_client_secret": "OUTLOOK_CLIENT_SECRET",
     "outlook_tenant_id": "OUTLOOK_TENANT_ID",
     "outlook_user_email": "OUTLOOK_USER_EMAIL",
+    "license_key": "AGELCLAW_LICENSE_KEY",
 }
 
 # Type coercions for non-string fields
@@ -136,5 +137,6 @@ def _get_default(key: str) -> Any:
         "outlook_client_secret": "",
         "outlook_tenant_id": "",
         "outlook_user_email": "",
+        "license_key": "",
     }
     return defaults.get(key, "")

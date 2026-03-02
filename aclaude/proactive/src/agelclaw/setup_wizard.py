@@ -111,8 +111,22 @@ def main():
             print("   Then run: claude auth login")
             print()
 
-    # Step 2: API Keys (optional — for direct API access or OpenAI)
-    print("2. API Keys (optional)")
+    # Step 2: License Key
+    print("2. License Key")
+    print("   Enter your Pro license key from agelclaw.dev (leave empty for free tier).")
+    print()
+    config["license_key"] = prompt_value(
+        "License Key (AGEL-XXXX-XXXX-XXXX-XXXX)",
+        current=config.get("license_key", ""),
+    )
+    if config.get("license_key"):
+        print("   License key saved. It will be validated on next startup.")
+    else:
+        print("   No key — running in free tier mode.")
+    print()
+
+    # Step 3: API Keys (optional — for direct API access or OpenAI)
+    print("3. API Keys (optional)")
     print("   Only needed if you want direct API access or OpenAI routing.")
     print()
     config["anthropic_api_key"] = prompt_value(
@@ -126,9 +140,9 @@ def main():
         secret=True,
     )
 
-    # Step 3: Default Provider
+    # Step 4: Default Provider
     print()
-    print("3. Default Provider")
+    print("4. Default Provider")
     print("   claude  — Use Claude (Anthropic) for all tasks")
     print("   openai  — Use OpenAI for all tasks")
     print("   auto    — Route automatically based on task type")
@@ -142,9 +156,9 @@ def main():
         print(f"  Invalid provider '{config['default_provider']}', using 'claude'")
         config["default_provider"] = "claude"
 
-    # Step 4: Telegram (optional)
+    # Step 5: Telegram (optional)
     print()
-    print("4. Telegram Bot (optional)")
+    print("5. Telegram Bot (optional)")
     print("   Create a bot via @BotFather on Telegram to get a token.")
     print()
     config["telegram_bot_token"] = prompt_value(
@@ -157,9 +171,9 @@ def main():
         current=config.get("telegram_allowed_users", ""),
     )
 
-    # Step 5: Ports
+    # Step 6: Ports
     print()
-    print("5. Port Settings")
+    print("6. Port Settings")
     print()
     config["api_port"] = int(prompt_value(
         "API server port",
@@ -172,9 +186,9 @@ def main():
         default="8420",
     ))
 
-    # Step 6: Limits
+    # Step 7: Limits
     print()
-    print("6. Limits")
+    print("7. Limits")
     print()
     config["cost_limit_daily"] = float(prompt_value(
         "Daily cost limit ($)",
@@ -214,6 +228,8 @@ def main():
         providers.append("OpenAI")
 
     print("Summary:")
+    lic_key = config.get("license_key", "")
+    print(f"  License: {lic_key[:14] + '...' if lic_key else 'Free tier'}")
     print(f"  Claude Code: {claude_status}")
     print(f"  Available providers: {', '.join(providers) if providers else 'None'}")
     print(f"  Default provider: {config['default_provider']}")

@@ -242,6 +242,8 @@ def _install_startup_script(project: Path) -> None:
       2. Starts 'agelclaw daemon' minimized
     Only created once — if the file already exists, it's skipped.
     """
+    from agelclaw._nuitka_compat import IS_COMPILED
+
     try:
         startup_dir = Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
         if not startup_dir.exists():
@@ -251,11 +253,18 @@ def _install_startup_script(project: Path) -> None:
         if bat.exists():
             return
 
-        bat.write_text(
-            "@echo off\r\n"
-            f'cd /d "{project}"\r\n'
-            "start /min agelclaw daemon\r\n",
-            encoding="utf-8",
-        )
+        if IS_COMPILED:
+            bat_content = (
+                "@echo off\r\n"
+                f'start /min "" "{sys.executable}" daemon\r\n'
+            )
+        else:
+            bat_content = (
+                "@echo off\r\n"
+                f'cd /d "{project}"\r\n'
+                "start /min agelclaw daemon\r\n"
+            )
+
+        bat.write_text(bat_content, encoding="utf-8")
     except Exception:
         pass  # Non-critical — don't fail init if startup script can't be created

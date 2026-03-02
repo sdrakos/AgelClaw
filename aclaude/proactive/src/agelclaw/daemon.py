@@ -237,8 +237,9 @@ def send_task_notification(task_id: int, task_title: str, status: str, result: s
             return
 
         # Build command
+        from agelclaw._nuitka_compat import get_python_exe
         cmd = [
-            sys.executable,
+            get_python_exe(),
             str(script_path),
             "--task-id", str(task_id),
             "--task-title", task_title,

@@ -575,9 +575,10 @@ def _scan_mcp_servers() -> tuple[dict, str]:
                 else:
                     resolved_args.append(arg)
 
-            # Resolve 'python' → sys.executable for reliability
+            # Resolve 'python' → real Python interpreter for reliability
             if command in ("python", "python3"):
-                command = _sys.executable
+                from agelclaw._nuitka_compat import get_python_exe
+                command = get_python_exe()
 
             # Build McpStdioServerConfig dict
             server_config = {"command": command, "args": resolved_args}
@@ -678,7 +679,8 @@ def load_mcp_server_config(name: str) -> dict | None:
                 resolved_args.append(arg)
 
         if command in ("python", "python3"):
-            command = _sys.executable
+            from agelclaw._nuitka_compat import get_python_exe
+            command = get_python_exe()
 
         config = {"command": command, "args": resolved_args}
         if env:

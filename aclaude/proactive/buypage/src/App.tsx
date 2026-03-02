@@ -4,6 +4,7 @@ import Footer from './components/Footer'
 import LandingPage from './pages/LandingPage'
 import SkillsPage from './pages/SkillsPage'
 import PricingPage from './pages/PricingPage'
+import SuccessPage from './pages/SuccessPage'
 
 function App() {
   return (
@@ -13,6 +14,7 @@ function App() {
         <Route path="/" element={<LandingPage />} />
         <Route path="/skills" element={<SkillsPage />} />
         <Route path="/pricing" element={<PricingPage />} />
+        <Route path="/success" element={<SuccessPage />} />
       </Routes>
       <Footer />
     </div>

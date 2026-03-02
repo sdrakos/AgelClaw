@@ -17,10 +17,50 @@ import os
 import sys
 import socket
 import subprocess
+from pathlib import Path
 
 import click
 
 from agelclaw import __version__
+
+
+# ── License check ────────────────────────────────────────
+
+def _check_license(cfg: dict) -> bool:
+    """Check license and print status. Returns True if allowed to continue."""
+    from agelclaw.licensing import check_license
+    result = check_license(cfg)
+
+    if result.get("tier") == "free" and result.get("valid"):
+        # No key = free tier, silently continue
+        return True
+
+    if result.get("valid"):
+        tier = result.get("tier", "pro").upper()
+        extra = ""
+        if result.get("offline_grace"):
+            extra = " (offline grace)"
+        elif result.get("cached"):
+            extra = " (cached)"
+        click.echo(f"  License: {tier}{extra}")
+        return True
+
+    # Invalid
+    error = result.get("error", "unknown")
+    error_msgs = {
+        "invalid_key": "Invalid license key. Check your key at agelclaw.dev",
+        "expired": "License expired. Renew at agelclaw.dev",
+        "revoked": "License revoked. Contact support@agelclaw.com",
+        "machine_mismatch": "License bound to a different machine. Contact support@agelclaw.com",
+        "cannot_validate": "Cannot reach license server. Starting in free mode.",
+    }
+    msg = error_msgs.get(error, f"License error: {error}")
+    click.echo(f"  License: {msg}")
+
+    if error == "cannot_validate":
+        return True  # Allow free mode when server unreachable
+
+    return False
 
 
 # ── Daemon auto-start helpers ────────────────────────────
@@ -36,10 +76,12 @@ def _ensure_daemon(daemon_port: int) -> subprocess.Popen | None:
         click.echo(f"  Daemon already running on :{daemon_port}")
         return None
 
+    from agelclaw._nuitka_compat import get_agelclaw_daemon_cmd
+
     click.echo(f"  Starting daemon on :{daemon_port} ...")
     creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     proc = subprocess.Popen(
-        [sys.executable, "-m", "agelclaw", "daemon"],
+        get_agelclaw_daemon_cmd(),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         creationflags=creation_flags,
@@ -68,6 +110,12 @@ def _stop_daemon(proc: subprocess.Popen | None):
 @click.pass_context
 def main(ctx, home, prompt):
     """AgelClaw — Self-evolving AI agent with persistent memory and skills."""
+    # Compiled mode: AgelClaw-Mem.exe dispatches to mem_cli
+    from agelclaw._nuitka_compat import IS_COMPILED
+    if IS_COMPILED and Path(sys.executable).stem.lower() == "agelclaw-mem":
+        from agelclaw.mem_cli import main as mem_main
+        raise SystemExit(mem_main() or 0)
+
     if home:
         os.environ["AGELCLAW_HOME"] = str(home)
         from agelclaw.project import reset_project_dir
@@ -78,6 +126,8 @@ def main(ctx, home, prompt):
         import asyncio
         from agelclaw.core.config import load_config
         cfg = load_config()
+        if not _check_license(cfg):
+            raise SystemExit(1)
         daemon_proc = _ensure_daemon(cfg.get("daemon_port", 8420))
 
         try:
@@ -141,6 +191,8 @@ def web(production, no_open, no_daemon):
     import uvicorn
 
     cfg = load_config()
+    if not _check_license(cfg):
+        raise SystemExit(1)
     daemon_port = cfg.get("daemon_port", 8420)
     daemon_proc = None
 
@@ -172,9 +224,11 @@ def telegram(no_daemon):
     from agelclaw.core.config import load_config
     from agelclaw.telegram_bot import main as telegram_main
 
+    cfg = load_config()
+    if not _check_license(cfg):
+        raise SystemExit(1)
     daemon_proc = None
     if not no_daemon:
-        cfg = load_config()
         daemon_proc = _ensure_daemon(cfg.get("daemon_port", 8420))
 
     try:

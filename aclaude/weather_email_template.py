@@ -490,8 +490,14 @@ def send_email(to_list, subject, html_body):
     token_resp.raise_for_status()
     access_token = token_resp.json()["access_token"]
 
-    # Build recipients
-    recipients = [{"emailAddress": {"address": addr.strip()}} for addr in to_list if addr.strip()]
+    # Build recipients — handle both space-separated and comma-separated formats
+    expanded = []
+    for addr in to_list:
+        for part in addr.split(","):
+            part = part.strip()
+            if part:
+                expanded.append(part)
+    recipients = [{"emailAddress": {"address": addr}} for addr in expanded]
 
     # Send email
     send_url = f"https://graph.microsoft.com/v1.0/users/{user_email}/sendMail"

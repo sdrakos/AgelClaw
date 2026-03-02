@@ -59,6 +59,13 @@ pip install git+https://github.com/sdrakos/AgelClaw.git
 pip install "agelclaw[all] @ git+https://github.com/sdrakos/AgelClaw.git"
 agelclaw init              # Create project dir (~/.agelclaw/) with config templates + bundled skills
 agelclaw setup             # Interactive wizard: Claude auth, API keys, Telegram, ports
+
+# ── Build Windows installer ──
+pip install nuitka ordered-set zstandard   # Prerequisites
+cd proactive
+python build_installer.py                  # Full build: Nuitka + embed + Inno Setup
+python build_installer.py --skip-nuitka    # Re-run Inno Setup only
+# Output: build/installer/AgelClaw-Setup-3.1.0.exe
 ```
 
 **No test suite or linting.** There is no pytest, ruff, mypy, or CI/CD configured. The `proactive/tests/` directory exists but is empty.
@@ -144,6 +151,7 @@ proactive/src/agelclaw/           # Python package (pip install)
 ├── daemon.py                     # FastAPI :8420 (scheduler, parallel tasks, SSE, notifications)
 ├── telegram_bot.py               # Telegram bot interface
 ├── agent_config.py               # System prompt, AGENT_TOOLS, build_agent_options(), get_agent(), get_router()
+├── _nuitka_compat.py             # Compiled-mode compatibility (IS_COMPILED, path helpers)
 ├── memory.py                     # SQLite WAL: tasks, conversations, learnings, kv_store, user_profile
 ├── mem_cli.py                    # CLI bridge: agelclaw-mem <command> (Bash-callable, non-streaming)
 ├── skill_tools.py                # MCP tools for skill CRUD (7 tools)
@@ -241,6 +249,8 @@ proactive/src/agelclaw/           # Python package (pip install)
 **Heartbeat proactivity.** Daemon runs `_maybe_run_heartbeat()` after each scheduler cycle. Controlled by `heartbeat_enabled`, `heartbeat_interval_hours`, `heartbeat_quiet_start/end` in config.yaml. Reads `persona/HEARTBEAT.md` for a user-editable checklist. Sends Telegram messages only when actionable.
 
 **Clean notifications.** Telegram notifications use the task's `result` field from `complete_task()` — not raw agent text with internal reasoning.
+
+**Windows installer (Nuitka + Inno Setup).** `build_installer.py` compiles the package with Nuitka `--standalone` into `AgelClaw.exe`, copies as `AgelClaw-Mem.exe` (filename-based dispatch), bundles Python 3.12 embeddable for MCP scripts, and runs Inno Setup → `AgelClaw-Setup-{version}.exe`. All runtime changes in `_nuitka_compat.py` behind `IS_COMPILED` guards — dev mode unchanged. Claude Code CLI installed during setup via npm. See `proactive/INSTALLER_MANUAL.md`.
 
 **Telegram notification splitting.** `send_telegram_notification()` splits long results into multiple messages (4096 char limit per message) instead of truncating.
 

@@ -17,7 +17,7 @@ const tiers = [
   },
   {
     name: 'Pro',
-    price: '29',
+    price: '49',
     description: 'All skills, monthly new additions, and priority support.',
     features: [
       'Everything in Free',
@@ -27,8 +27,8 @@ const tiers = [
       'Multi-agent orchestrator',
       'Email support',
     ],
-    cta: 'Coming Soon',
-    ctaLink: '#',
+    cta: 'Subscribe to Pro',
+    ctaLink: '/api/checkout',
     highlighted: true,
   },
   {
