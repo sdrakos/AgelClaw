@@ -97,9 +97,12 @@ def main(ctx, home, prompt):
 @click.argument("directory", required=False, default=None)
 def init(directory):
     """Initialize a new AgelClaw project directory."""
+    import sys
     from agelclaw.project import init_project
     path = init_project(directory)
     click.echo(f"Project initialized at: {path}")
+    if sys.platform == "win32":
+        click.echo("Daemon auto-start installed (Windows Startup folder)")
     click.echo()
     click.echo("Next steps:")
     click.echo("  agelclaw setup       — Configure API keys and settings")

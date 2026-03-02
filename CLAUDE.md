@@ -122,7 +122,7 @@ daemon (:8420) — Parallel Execution
   ├── scheduler_loop(): sleeps until next due task or CHECK_INTERVAL
   ├── run_agent_cycle(): gathers due + pending tasks
   ├── _maybe_run_heartbeat(): proactive check after each cycle (if enabled)
-  ├── execute_single_task() / execute_subagent_task()  — parallel via asyncio.gather
+  ├── execute_single_task() / execute_subagent_task()  — fire-and-forget via asyncio.create_task
   ├── Semaphore limits concurrency (max_concurrent_tasks)
   ├── POST /task → add + wake daemon
   ├── GET /events → SSE (task_start, task_end, task_error, agent_text, tool_use)
@@ -213,7 +213,7 @@ proactive/src/agelclaw/           # Python package (pip install)
 
 **YAML config + env var overrides.** `core/config.py` loads `config.yaml`, maps keys to env vars (e.g. `anthropic_api_key` → `ANTHROPIC_API_KEY`). Env vars win. Singleton with `load_config(force_reload=True)`.
 
-**Parallel task execution.** Daemon runs tasks via `asyncio.gather()` with semaphore concurrency limit. Each task gets independent `query()` call. SSE events tagged with `task_id` for per-task UI tracking.
+**Fire-and-forget task execution.** Daemon uses `asyncio.create_task()` instead of `await asyncio.gather()`. The scheduler loop launches tasks and immediately continues to the next cycle — long-running tasks no longer block pickup of new work. Semaphore still limits concurrency (`max_concurrent_tasks`). Each task's `finally` block handles cleanup.
 
 **Non-streaming SDK on Windows.** Claude Agent SDK streaming has initialization timeouts on Windows. All services use non-streaming `query(prompt=string)`. MCP tools replaced by `agelclaw-mem` CLI called via Bash.
 
@@ -228,6 +228,10 @@ proactive/src/agelclaw/           # Python package (pip install)
 **Confirmation = Execute.** When the user says "ναι", "yes", "nai", "ok" in response to a proposed action, the agent executes immediately using tools — no re-description, no second confirmation.
 
 **cancel_task fallback.** `cancel_task` in mem_cli first tries the daemon endpoint (for running tasks). If daemon returns 404 (task not running), it falls back to `delete_task` (removes from database). This handles both running and scheduled task cancellation.
+
+**Auto-start daemon on Windows login.** `project.py`'s `init_project()` calls `_install_startup_script()` on Windows, which creates `agelclaw_daemon.bat` in `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\`. The bat file `cd`s to the project directory and runs `start /min agelclaw daemon`. Only created once — skipped if already exists. Non-critical: failure doesn't block init.
+
+**Port-aware service startup.** `agent_run.py` (dev runner) checks if a service's port is already in use before starting it. If the daemon is already running on `:8420` or the API server on `:8000`, it skips that service instead of crashing with `Address already in use`.
 
 **Persona files.** `persona/SOUL.md` (values & behavior) and `persona/IDENTITY.md` (name, vibe, user info) are loaded at the top of every system prompt via `_load_persona_files()`. `persona/BOOTSTRAP.md` triggers first-run onboarding — the agent guides the user through setup, updates the profile and IDENTITY.md, then deletes BOOTSTRAP.md. All files are user-editable. Changes take effect within 120s (prompt cache TTL).
 

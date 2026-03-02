@@ -16,6 +16,7 @@ Package data (immutable, bundled in the wheel):
 
 import os
 import shutil
+import sys
 from functools import lru_cache
 from pathlib import Path
 
@@ -204,4 +205,35 @@ def init_project(path: Path | str | None = None) -> Path:
         if src.exists() and not dst.exists():
             shutil.copy2(src, dst)
 
+    # Install auto-start daemon on Windows login
+    if sys.platform == "win32":
+        _install_startup_script(project)
+
     return project
+
+
+def _install_startup_script(project: Path) -> None:
+    """Create a .bat in Windows Startup folder to auto-start the daemon on login.
+
+    The script:
+      1. cd to the project dir (so config.yaml is found)
+      2. Starts 'agelclaw daemon' minimized
+    Only created once — if the file already exists, it's skipped.
+    """
+    try:
+        startup_dir = Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+        if not startup_dir.exists():
+            return
+
+        bat = startup_dir / "agelclaw_daemon.bat"
+        if bat.exists():
+            return
+
+        bat.write_text(
+            "@echo off\r\n"
+            f'cd /d "{project}"\r\n'
+            "start /min agelclaw daemon\r\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        pass  # Non-critical — don't fail init if startup script can't be created

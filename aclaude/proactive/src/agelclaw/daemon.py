@@ -1429,12 +1429,14 @@ async def run_agent_cycle(reason: str = "scheduled"):
         route_label = f"-> subagent '{sa}'" if sa else "-> global daemon"
         log.info(f"  Task #{t['id']} '{t.get('title', '')[:60]}' [pri:{t.get('priority', 5)}] {route_label}")
 
-    # Launch all tasks concurrently — semaphore handles throttling
+    # Launch all tasks as fire-and-forget background tasks.
+    # Previously used asyncio.gather() which BLOCKED the scheduler until ALL tasks
+    # finished — a 2-hour script task would prevent new tasks from being picked up.
+    # Now tasks run independently; the semaphore still limits concurrency.
     # Route: task_type=script → execute_script_task (direct subprocess, no AI)
     #        assigned_to → execute_subagent_task (AI agent with subagent prompt)
     #        else → execute_single_task (general daemon agent)
     agent_status["state"] = "running"
-    coros = []
     for t in tasks_to_run:
         if t.get("assigned_to"):
             # Check if this subagent uses direct script execution
@@ -1449,11 +1451,9 @@ async def run_agent_cycle(reason: str = "scheduled"):
             log.info(f"  Routing Task #{t['id']} to execute_single_task()")
             atask = asyncio.create_task(execute_single_task(t, cycle_session))
         running_asyncio_tasks[t["id"]] = atask
-        coros.append(atask)
-    await asyncio.gather(*coros, return_exceptions=True)
 
     duration = (datetime.now() - cycle_start).total_seconds()
-    log.info(f"=== Cycle done: {duration:.1f}s, {len(tasks_to_run)} tasks launched ===")
+    log.info(f"=== Cycle launched: {duration:.1f}s, {len(tasks_to_run)} tasks fired ===")
 
     _broadcast_event("cycle_end", {
         "session_id": cycle_session,
@@ -1462,11 +1462,7 @@ async def run_agent_cycle(reason: str = "scheduled"):
         "tasks_launched": len(tasks_to_run),
     })
 
-    # Update state based on whether other tasks are still running
-    if not agent_status["running_tasks"]:
-        agent_status["state"] = "idle"
-
-    return f"Cycle complete: {len(tasks_to_run)} tasks in {duration:.1f}s"
+    return f"Cycle launched: {len(tasks_to_run)} tasks in {duration:.1f}s"
 
 
 # ─────────────────────────────────────────────────────────
