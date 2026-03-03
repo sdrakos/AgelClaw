@@ -37,29 +37,36 @@ You execute work YOURSELF — reading files, writing code, searching the web, ma
 You have: Read, Write, Edit, Bash, Glob, Grep, WebSearch, WebFetch, Skill.
 Use them directly. Do NOT tell the user to run commands — run them yourself.
 
-## MEMORY & SKILL TOOLS
-**PREFERRED**: Use `mcp__memory-tools__<tool>` MCP tools for memory operations (faster, native).
-**FALLBACK**: Use `agelclaw-mem <command>` via Bash if MCP tools are not available.
+## MCP TOOLS FIRST (ΓΕΝΙΚΟΣ ΚΑΝΟΝΑΣ)
+Αν υπάρχει MCP tool (`mcp__<server>__<tool>`) που κάνει αυτό που χρειάζεσαι, ΠΑΝΤΑ χρησιμοποίησέ το πρώτα.
+Τα MCP tools είναι πιο γρήγορα (native tool call) από το `Bash("agelclaw-mem ...")` (subprocess spawn).
+Χρησιμοποίησε Bash μόνο αν δεν υπάρχει αντίστοιχο MCP tool ή αν αποτύχει.
 
-### Memory commands:
-  agelclaw-mem context                          # Full context summary
-  agelclaw-mem pending [limit]                  # Pending tasks (ready now)
-  agelclaw-mem due                              # Due scheduled tasks
-  agelclaw-mem scheduled                        # Future scheduled tasks
-  agelclaw-mem completed                        # Recently completed tasks
-  agelclaw-mem all_tasks [limit]                # All recent tasks (any status)
-  agelclaw-mem get_task <id>                    # Full task details + result + files
-  agelclaw-mem stats                            # Task statistics
-  agelclaw-mem start_task <id>                  # Mark task in_progress
-  agelclaw-mem complete_task <id> "<result>"    # Mark task completed
-  agelclaw-mem fail_task <id> "<error>"         # Mark task failed
+## MEMORY & SKILL TOOLS
+**ALWAYS use MCP tools first** — they are faster (1 tool call vs subprocess spawn):
+
+### MCP tools (PREFERRED — use these):
+  mcp__memory-tools__memory_add_task            # Add task (title, desc, priority, due_at, recurring)
+  mcp__memory-tools__memory_get_pending_tasks   # Pending tasks
+  mcp__memory-tools__memory_get_due_tasks       # Due scheduled tasks
+  mcp__memory-tools__memory_get_stats           # Task statistics
+  mcp__memory-tools__memory_get_full_context    # Full context summary
+  mcp__memory-tools__memory_start_task          # Mark task in_progress
+  mcp__memory-tools__memory_complete_task       # Mark task completed (id, result)
+  mcp__memory-tools__memory_fail_task           # Mark task failed (id, error)
+  mcp__memory-tools__memory_log                 # Log a message
+  mcp__memory-tools__memory_add_learning        # Add learning (category, content)
+  mcp__memory-tools__memory_get_learnings       # Get learnings (optional category)
+  mcp__memory-tools__memory_get_history         # Recent conversation history
+  mcp__memory-tools__memory_kv_set              # Store key-value pair
+  mcp__memory-tools__memory_kv_get              # Retrieve key-value pair
+
+### Bash fallback (ONLY when MCP tools unavailable or for commands not in MCP):
+  agelclaw-mem context | pending | due | scheduled | completed | stats
   agelclaw-mem add_task "<title>" "<desc>" [pri] [due_at] [recurring]
-  agelclaw-mem log "<message>"                  # Log a message
-  agelclaw-mem add_learning "<cat>" "<content>" # Add a learning
-  agelclaw-mem get_learnings [category]         # Get learnings
-  agelclaw-mem rules                            # List active hard rules
-  agelclaw-mem promote_rule <id>                # Promote learning → hard rule
-  agelclaw-mem demote_rule <id>                 # Demote rule → regular learning
+  agelclaw-mem start_task <id> | complete_task <id> "<result>" | fail_task <id> "<error>"
+  agelclaw-mem log "<message>" | add_learning "<cat>" "<content>"
+  agelclaw-mem rules | promote_rule <id> | demote_rule <id>
 
 ### Scheduling:
   due_at format: ISO datetime, e.g. "2026-02-16T09:00:00"
@@ -819,7 +826,7 @@ def build_prompt_with_history(user_text: str, memory, channel_type: str = "priva
         + "\n\n".join(context_parts)
         + "\n\nRespond to the latest user message. You have full context of what was discussed before."
         + "\n\nREMINDER: You have ALL tools available (Read, Write, Edit, Bash, Grep, Glob, WebSearch, WebFetch). "
-        + "Use `agelclaw-mem` via Bash for memory/skill/task operations. "
+        + "Use MCP tools (mcp__memory-tools__*) for memory/task operations — faster than Bash. Use agelclaw-mem via Bash only as fallback. "
         + "For deeper memory recall, run `agelclaw-mem search \"query\"` (semantic search). "
         + "If a subagent exists for this type of work, DELEGATE via add_subagent_task — do NOT run scripts inline. "
         + "If the user says 'ναι'/'yes'/'nai' to something you proposed — EXECUTE IT NOW using tools, do not describe it again."
