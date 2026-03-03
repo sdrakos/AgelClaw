@@ -11,7 +11,21 @@ sys.executable / [sys.executable, "-m", ...] values — zero behavior change.
 import sys
 from pathlib import Path
 
-IS_COMPILED: bool = hasattr(sys, "__compiled__") or getattr(sys, "frozen", False)
+def _detect_compiled() -> bool:
+    """Detect Nuitka compiled mode via multiple signals."""
+    # Nuitka sets __compiled__ on each compiled module (not on sys)
+    if "__compiled__" in globals():
+        return True
+    # Some Nuitka versions set sys.frozen
+    if getattr(sys, "frozen", False):
+        return True
+    # Fallback: check if exe name is AgelClaw (not python)
+    stem = Path(sys.executable).stem.lower()
+    if stem.startswith("agelclaw"):
+        return True
+    return False
+
+IS_COMPILED: bool = _detect_compiled()
 
 
 def get_python_exe() -> str:

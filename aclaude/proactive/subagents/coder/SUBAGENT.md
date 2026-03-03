@@ -201,6 +201,55 @@ if __name__ == "__main__":
 
 ΚΑΝΟΝΑΣ: Αν δεν μπορείς να δείξεις log line ή data που αποδεικνύει το πρόβλημα, ΔΕΝ ΕΧΕΙΣ διάγνωση.
 
+## Αποστολή Email (ΕΝΙΑΙΟ REFERENCE)
+
+Ολα τα scripts στο codebase χρησιμοποιούν **Microsoft Graph API** (OAuth2) μέσω Outlook (sdrakos@agel.ai).
+
+### Μέθοδος 1: Skill Script (προτιμώμενο για νέα scripts)
+```bash
+python "C:/Users/Στέφανος/agel_openai/AGENTI_SDK/aclaude/.Claude/Skills/microsoft-graph-email/scripts/send_email.py" \
+  --to "user@example.com" \
+  --subject "Θέμα" \
+  --body "<h1>HTML body</h1>" \
+  --cc "cc@example.com" \
+  --attachment file.xlsx
+```
+
+**Flags:**
+| Flag | Τύπος | Περιγραφή |
+|------|-------|-----------|
+| `--to` | required | Παραλήπτες (comma-separated) |
+| `--subject` | required | Θέμα email |
+| `--body` | optional | HTML ή plain text body |
+| `--html-file` | optional | Διάβασε HTML body από αρχείο |
+| `--text-file` | optional | Διάβασε plain text body από αρχείο |
+| `--cc` | optional | CC παραλήπτες (comma-separated) |
+| `--bcc` | optional | BCC παραλήπτες (comma-separated) |
+| `--importance` | optional | low / normal / high |
+| `--attachment` | optional | File path (repeatable: `--attachment a.pdf --attachment b.xlsx`) |
+
+### Μέθοδος 2: Subagent-specific scripts
+Κάθε subagent έχει ενσωματωμένη αποστολή email. **ΠΡΟΣΟΧΗ στα flags:**
+
+| Subagent | Script | Email Flag | Format |
+|----------|--------|------------|--------|
+| naval | `oracle_monitor.py` | `--to` | space-separated (nargs="+") |
+| weather | `weather_email_template.py` | `--to` | space-separated (nargs="+") |
+| diaugeia | `tender_monitor.py` | `--email` | comma-separated |
+| cinema | cinema script | `--to` | comma-separated |
+
+**ΚΡΙΣΙΜΟ:** Η Διαύγεια χρησιμοποιεί `--email` (ΟΧΙ `--to`). Πάντα ελέγχεις `python script.py --help` πριν στείλεις email.
+
+### Config (ήδη στο config.yaml)
+```yaml
+outlook_client_id: "..."
+outlook_client_secret: "..."
+outlook_tenant_id: "..."
+outlook_user_email: "sdrakos@agel.ai"
+```
+
+Env vars: `OUTLOOK_CLIENT_ID`, `OUTLOOK_CLIENT_SECRET`, `OUTLOOK_TENANT_ID`, `OUTLOOK_USER_EMAIL`
+
 ## ΚΑΝΟΝΕΣ
 
 1. **Κάθε script τρέχει μόνο του** — self-contained, no manual steps. Αν χρειάζεται config, χρησιμοποιεί argparse flags ή environment variables.
@@ -213,3 +262,13 @@ if __name__ == "__main__":
 8. **Paths**: πάντα absolute paths (Windows format με forward slashes: `C:/Users/...`).
 9. **Encoding**: `encoding="utf-8"` σε κάθε open() call — Windows default είναι cp1252.
 10. **Errors**: αν κάτι αποτύχει, βάλε ξεκάθαρο error message στο `fail_task`, μην κρύβεις errors.
+11. **ΠΟΤΕ hardcoded parent count για .env/config** — Skill scripts (`.Claude/Skills/`) και subagent scripts (`subagents/`) έχουν ΔΙΑΦΟΡΕΤΙΚΟ nesting depth. ΠΑΝΤΑ χρησιμοποιείς search-upward:
+```python
+_d = Path(__file__).resolve().parent
+for _ in range(8):
+    _d = _d.parent
+    if (_d / "proactive" / ".env").exists():
+        load_dotenv(_d / "proactive" / ".env")
+        break
+```
+ΑΠΑΓΟΡΕΥΕΤΑΙ: `Path(__file__).parent.parent.parent.parent / "proactive" / ".env"` — σπάει σε διαφορετικά install paths.

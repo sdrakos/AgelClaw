@@ -2,10 +2,10 @@
 AgelClaw Windows Installer Builder
 ====================================
 Orchestrates the full build pipeline:
-  1. Compile with Nuitka → AgelClaw.dist/AgelClaw.exe
-  2. Copy AgelClaw.exe → AgelClaw-Mem.exe (filename-based dispatch)
+  1. Compile with Nuitka -> AgelClaw.dist/AgelClaw.exe
+  2. Copy AgelClaw.exe -> AgelClaw-Mem.exe (filename-based dispatch)
   3. Download & extract Python embeddable into dist/python-embed/
-  4. Run Inno Setup → AgelClaw-Setup-{version}.exe
+  4. Run Inno Setup -> AgelClaw-Setup-{version}.exe
 
 Prerequisites (developer machine):
   pip install nuitka ordered-set zstandard
@@ -68,15 +68,35 @@ def step_nuitka():
         print(f"ERROR: Entry point not found: {entry_point}")
         sys.exit(1)
 
+    # Excluded packages: heavy deps that AgelClaw doesn't need at runtime
+    excluded = ",".join([
+        "tkinter", "test", "unittest", "pytest", "pip", "setuptools",
+        "agelclaw.data",
+        # ML/science — pulled transitively, never used
+        "torch", "matplotlib", "numpy", "scipy", "pandas", "PIL", "cv2",
+        "IPython", "jupyter", "notebook", "sklearn", "tensorflow",
+        # LLM routing bloat
+        "litellm", "onnxruntime", "sounddevice", "pyaudio",
+        # ASN/crypto bloat
+        "pyasn1_modules", "pyasn1",
+        # Other heavy unused
+        "docutils", "pygments", "sphinx", "babel",
+    ])
+
+    nproc = os.cpu_count() or 4
+
     cmd = [
         sys.executable, "-m", "nuitka",
         "--standalone",
+        "--zig",
+        "--assume-yes-for-downloads",
+        f"--jobs={nproc}",
         f"--output-dir={BUILD_DIR}",
         "--output-filename=AgelClaw.exe",
         "--include-package=agelclaw",
         "--include-package-data=agelclaw",
         f"--include-data-dir={SRC / 'data'}=agelclaw/data",
-        "--nofollow-import-to=tkinter,test,unittest,pytest,pip,setuptools",
+        f"--nofollow-import-to={excluded}",
         "--windows-console-mode=attach",
         f"--company-name=AgelClaw",
         f"--product-name=AgelClaw",
@@ -106,7 +126,7 @@ def step_nuitka():
         if possible:
             actual_dist = possible[0]
             if actual_dist != DIST_DIR:
-                print(f"  Renaming {actual_dist.name} → AgelClaw.dist")
+                print(f"  Renaming {actual_dist.name} -> AgelClaw.dist")
                 actual_dist.rename(DIST_DIR)
 
     exe = DIST_DIR / "AgelClaw.exe"
@@ -114,7 +134,7 @@ def step_nuitka():
         # Check for cli_entry.exe (Nuitka names after the source file)
         alt_exe = DIST_DIR / "cli_entry.exe"
         if alt_exe.exists():
-            print(f"  Renaming cli_entry.exe → AgelClaw.exe")
+            print(f"  Renaming cli_entry.exe -> AgelClaw.exe")
             alt_exe.rename(exe)
 
     if not exe.exists():
@@ -129,7 +149,7 @@ def step_nuitka():
 
 
 def step_copy_mem_exe():
-    """Step 2: Copy AgelClaw.exe → AgelClaw-Mem.exe."""
+    """Step 2: Copy AgelClaw.exe -> AgelClaw-Mem.exe."""
     print()
     print("=" * 60)
     print("STEP 2: Creating AgelClaw-Mem.exe (copy)")
@@ -143,7 +163,7 @@ def step_copy_mem_exe():
         sys.exit(1)
 
     shutil.copy2(src_exe, dst_exe)
-    print(f"  Copied → {dst_exe.name}")
+    print(f"  Copied -> {dst_exe.name}")
 
 
 def step_python_embed():

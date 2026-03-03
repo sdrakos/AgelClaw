@@ -162,6 +162,31 @@ tools:                  # Optional — restrict available tools
 ---
 ```
 
+## CRITICAL: Loading .env / config in Scripts
+
+Subagent scripts live in `subagents/<name>/scripts/` — **NEVER use hardcoded parent count** (e.g. `parent.parent.parent.parent`) because the nesting depth varies between skill scripts, subagent scripts, and installed paths.
+
+**CORRECT — Search-upward pattern (MANDATORY):**
+```python
+from pathlib import Path
+from dotenv import load_dotenv
+
+_d = Path(__file__).resolve().parent
+for _ in range(8):
+    _d = _d.parent
+    if (_d / "proactive" / ".env").exists():
+        load_dotenv(_d / "proactive" / ".env")
+        break
+    if (_d / ".env").exists():
+        load_dotenv(_d / ".env")
+        break
+```
+
+**WRONG — Hardcoded parent count (FORBIDDEN):**
+```python
+_env = Path(__file__).parent.parent.parent.parent / "proactive" / ".env"
+```
+
 ## Verification
 
 After creating a subagent, verify:

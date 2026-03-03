@@ -123,3 +123,46 @@ scripts/package_skill.py <path/to/skill-folder> ./dist  # optional output dir
 - **Avoid deeply nested references** - Keep one level deep from SKILL.md
 - **Structure long files** - Add table of contents for files >100 lines
 - **Test scripts** - Run representative samples to ensure they work
+
+## CRITICAL: Loading .env / config in Skill Scripts
+
+Skill scripts live in `.Claude/Skills/<name>/scripts/` — **NEVER use hardcoded parent count** (e.g. `parent.parent.parent.parent`) because the nesting depth changes depending on install path.
+
+**CORRECT — Search-upward pattern (MANDATORY):**
+```python
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Search upward for proactive/.env (works from any depth)
+_d = Path(__file__).resolve().parent
+for _ in range(8):
+    _d = _d.parent
+    if (_d / "proactive" / ".env").exists():
+        load_dotenv(_d / "proactive" / ".env")
+        break
+    if (_d / ".env").exists():
+        load_dotenv(_d / ".env")
+        break
+```
+
+**WRONG — Hardcoded parent count (FORBIDDEN):**
+```python
+# NO! This breaks when nesting depth changes
+_env = Path(__file__).parent.parent.parent.parent / "proactive" / ".env"
+```
+
+**Alternative** — load config.yaml (preferred when available):
+```python
+try:
+    from core.config import load_config
+    cfg = load_config()
+except Exception:
+    import yaml
+    _d = Path(__file__).resolve().parent
+    for _ in range(8):
+        _d = _d.parent
+        if (_d / "proactive" / "config.yaml").exists():
+            with open(_d / "proactive" / "config.yaml", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+            break
+```

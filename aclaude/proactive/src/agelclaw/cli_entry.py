@@ -110,12 +110,6 @@ def _stop_daemon(proc: subprocess.Popen | None):
 @click.pass_context
 def main(ctx, home, prompt):
     """AgelClaw — Self-evolving AI agent with persistent memory and skills."""
-    # Compiled mode: AgelClaw-Mem.exe dispatches to mem_cli
-    from agelclaw._nuitka_compat import IS_COMPILED
-    if IS_COMPILED and Path(sys.executable).stem.lower() == "agelclaw-mem":
-        from agelclaw.mem_cli import main as mem_main
-        raise SystemExit(mem_main() or 0)
-
     if home:
         os.environ["AGELCLAW_HOME"] = str(home)
         from agelclaw.project import reset_project_dir
@@ -287,6 +281,28 @@ def chat():
     import asyncio
     from agelclaw.cli import main as cli_main
     asyncio.run(cli_main())
+
+
+@main.command(context_settings=dict(
+    ignore_unknown_options=True, allow_extra_args=True,
+))
+@click.pass_context
+def mem(ctx):
+    """Memory CLI: tasks, learnings, skills, subagents.
+
+    \b
+    Examples:
+        agelclaw mem stats
+        agelclaw mem pending
+        agelclaw mem add_task "title" "desc"
+    """
+    old_argv = sys.argv
+    sys.argv = ["agelclaw-mem"] + ctx.args
+    from agelclaw.mem_cli import main as mem_main
+    try:
+        mem_main()
+    finally:
+        sys.argv = old_argv
 
 
 @main.command()
