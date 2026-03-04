@@ -66,14 +66,3 @@ def get_agelclaw_daemon_cmd() -> list[str]:
     return [sys.executable, "-m", "agelclaw", "daemon"]
 
 
-def get_mem_cli_cmd() -> list[str]:
-    """Return command prefix for agelclaw-mem calls.
-
-    Compiled: [<install_dir>/AgelClaw-Mem.exe]
-    Dev: [sys.executable, -m, agelclaw.mem_cli]
-    """
-    if IS_COMPILED:
-        app_dir = Path(sys.executable).parent
-        mem_exe = app_dir / "AgelClaw-Mem.exe"
-        return [str(mem_exe)]
-    return [sys.executable, "-m", "agelclaw.mem_cli"]

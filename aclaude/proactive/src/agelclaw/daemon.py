@@ -226,14 +226,22 @@ def send_telegram_notification(task_id: int, task_title: str, status: str, resul
 def send_task_notification(task_id: int, task_title: str, status: str, result: str, duration: float = None):
     """Send email notification when a task completes"""
     try:
-        # Get path to notification script
-        script_path = Path.home() / ".claude" / "skills" / "task-completion-notifier" / "scripts" / "task_notifier.py"
-        if not script_path.exists():
-            # Try project skills
-            script_path = get_skills_dir() / "task-completion-notifier" / "scripts" / "task_notifier.py"
+        # Get path to notification script — search multiple locations
+        notifier_rel = Path("task-completion-notifier") / "scripts" / "task_notifier.py"
+        candidates = [
+            Path.home() / ".claude" / "skills" / notifier_rel,
+            get_skills_dir() / notifier_rel,
+            # Skills may be in parent dir (e.g. aclaude/.Claude/Skills/ when cwd is proactive/)
+            get_skills_dir().parent.parent.parent / ".Claude" / "Skills" / notifier_rel,
+        ]
+        script_path = None
+        for c in candidates:
+            if c.exists():
+                script_path = c
+                break
 
-        if not script_path.exists():
-            log.warning(f"Notification script not found at {script_path}")
+        if not script_path:
+            log.warning(f"Notification script not found (searched {len(candidates)} locations)")
             return
 
         # Build command

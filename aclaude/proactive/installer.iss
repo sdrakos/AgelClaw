@@ -40,7 +40,6 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "addtopath"; Description: "Add AgelClaw to PATH"; GroupDescription: "System:"; Flags: checked
 Name: "autostart"; Description: "Start AgelClaw daemon on login"; GroupDescription: "System:"; Flags: unchecked
-Name: "installclaude"; Description: "Install Claude Code CLI (requires Node.js)"; GroupDescription: "Dependencies:"; Flags: checked
 
 [Files]
 ; Main distribution (Nuitka output)
@@ -54,10 +53,10 @@ Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Parameters: "web"; Tasks: desktopicon; Comment: "AgelClaw Web UI"
 
 [Run]
-; Post-install: install Claude Code CLI via npm (if checkbox selected and npm available)
-Filename: "{cmd}"; Parameters: "/c npm install -g @anthropic-ai/claude-code"; \
-  StatusMsg: "Installing Claude Code CLI..."; Tasks: installclaude; \
-  Flags: runhidden waituntilterminated; Check: IsNodeInstalled
+; Post-install: install Claude Code CLI via bundled npm
+Filename: "{app}\node\npm.cmd"; Parameters: "install -g @anthropic-ai/claude-code"; \
+  StatusMsg: "Installing Claude Code CLI (may take a minute)..."; \
+  Flags: runhidden waituntilterminated
 
 ; Post-install: run agelclaw init
 Filename: "{app}\{#MyAppExeName}"; Parameters: "init"; \
@@ -73,26 +72,13 @@ Filename: "{app}\{#MyAppExeName}"; Parameters: "setup"; \
 ; Clean up PATH on uninstall (handled by registry changes below)
 
 [Registry]
-; Add to user PATH
+; Add to user PATH (app dir + bundled node)
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
-  ValueData: "{olddata};{app}"; Tasks: addtopath; \
+  ValueData: "{olddata};{app};{app}\node"; Tasks: addtopath; \
   Check: NeedsAddPath(ExpandConstant('{app}'))
 
 [Code]
 // ── Pascal Script helpers ──────────────────────────
-
-function IsNodeInstalled: Boolean;
-var
-  ResultCode: Integer;
-begin
-  // Check if npm is available
-  Result := Exec('cmd', '/c npm --version', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)
-            and (ResultCode = 0);
-  if not Result then
-    MsgBox('Node.js/npm not found. Claude Code CLI will not be installed.' + #13#10 +
-           'Install Node.js from https://nodejs.org and then run:' + #13#10 +
-           '  npm install -g @anthropic-ai/claude-code', mbInformation, MB_OK);
-end;
 
 function NeedsAddPath(Param: string): Boolean;
 var
@@ -136,6 +122,7 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usPostUninstall then
   begin
+    RemovePath(ExpandConstant('{app}\node'));
     RemovePath(ExpandConstant('{app}'));
   end;
 end;

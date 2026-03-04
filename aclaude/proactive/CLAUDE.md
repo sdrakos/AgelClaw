@@ -255,6 +255,12 @@ INSTALLER_MANUAL.md               # Detailed manual for the Windows installer pi
 
 **memory-tools MCP server.** Bundled auto-loaded MCP server that provides native tool access to all `agelclaw-mem` operations: tasks (pending, due, stats, add_task, complete_task), learnings, profile, skills, subagents. Replaces `Bash("agelclaw-mem <cmd>")` with direct `mcp__memory-tools__<cmd>` calls — 1 tool call instead of 4. Agent can still use `agelclaw-mem` via Bash as fallback.
 
+**MCP tools-first rule.** System prompt includes a general rule: if an MCP tool (`mcp__<server>__<tool>`) exists for an operation, always use it before falling back to Bash. MCP tools are native tool calls (faster) vs `agelclaw-mem` subprocess spawn (slower). This applies to all operations, not just memory — any MCP server's tools take priority over equivalent Bash commands. The coder subagent (SUBAGENT.md) also includes this rule with a full list of available MCP memory tools.
+
+**Search-upward .env pattern for skill scripts.** Skill scripts that need credentials (e.g. Outlook email) must NOT use hardcoded parent directory counts (`Path(__file__).parent.parent.parent.parent / ".env"`) because the depth varies between dev install and pip install. Instead, traverse parent directories upward looking for `proactive/.env` or `.env`. This rule is enforced in skill-creator SKILL.md and subagent-creator SKILL.md.
+
+**Notification script multi-path search.** `daemon.py`'s `send_task_notification()` searches multiple locations for the notification script: `~/.claude/skills/`, `get_skills_dir()`, and parent directory fallback (for when cwd is `proactive/` but skills are in `aclaude/.Claude/Skills/`).
+
 **Skill-first execution.** Before any task, agents call `agelclaw-mem find_skill "<description>"`. If no match: research, create skill (SKILL.md + scripts/ + references/), then execute. Skills in `.Claude/Skills/` (project) or `~/.claude/skills/` (user).
 
 **Hard rules (promoted learnings).** Learnings promoted to rules (`is_rule=1`) are injected into every system prompt via `memory.build_rules_prompt()`. Manage via `agelclaw-mem promote_rule/demote_rule/rules`.
@@ -283,7 +289,7 @@ INSTALLER_MANUAL.md               # Detailed manual for the Windows installer pi
 
 **Telegram terminal logging.** `telegram_bot.py` logs detailed agent activity to the terminal: `[Query start]` with user message, `[Tool #N]` with tool name and arguments (Bash commands, file paths, search queries), `[Agent]` with text output preview, `[Query done]` with elapsed time and response preview, `[Sending]` with chunk count. Enables real-time monitoring of what the agent is doing.
 
-**Windows installer (Nuitka + Inno Setup).** `build_installer.py` compiles the package with Nuitka `--standalone` → `AgelClaw.exe`, copies it as `AgelClaw-Mem.exe` (filename-based dispatch to `mem_cli`), downloads Python 3.12 embeddable for MCP server scripts, and runs Inno Setup to produce `AgelClaw-Setup-{version}.exe`. All runtime changes are in `_nuitka_compat.py` behind `IS_COMPILED` guards — dev mode (`pip install -e .`) is 100% unchanged. Claude Code CLI is installed during setup via `npm install -g @anthropic-ai/claude-code` (not bundled). See `INSTALLER_MANUAL.md` for full details.
+**Windows installer (Nuitka + Inno Setup).** `build_installer.py` compiles the package with Nuitka `--standalone` → `AgelClaw.exe`, bundles Node.js 22 portable (for npm/Claude CLI), Python 3.12 embeddable (for MCP scripts), and runs Inno Setup → `AgelClaw-Setup-{version}.exe`. All runtime changes in `_nuitka_compat.py` behind `IS_COMPILED` guards — dev mode unchanged. See `INSTALLER_MANUAL.md` for full details.
 
 **Telegram notification splitting.** Daemon's `send_telegram_notification()` splits long results into multiple messages (4096 char limit per message) instead of truncating at 400 chars. First message includes the task title header, subsequent messages are continuation text.
 
@@ -364,4 +370,4 @@ Tools available to agents (defined in `agent_config.py`):
 AGENT_TOOLS = ["Skill", "Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebFetch", "WebSearch"]
 ```
 
-Agents use `agelclaw-mem <command>` via Bash for all memory, skill, and profile operations.
+Agents prefer MCP tools (`mcp__memory-tools__*`) for memory/task operations — faster than Bash. Use `agelclaw-mem` via Bash only as fallback.

@@ -3,7 +3,7 @@ AgelClaw Windows Installer Builder
 ====================================
 Orchestrates the full build pipeline:
   1. Compile with Nuitka -> AgelClaw.dist/AgelClaw.exe
-  2. Copy AgelClaw.exe -> AgelClaw-Mem.exe (filename-based dispatch)
+  2. Download & extract Node.js portable into dist/node/
   3. Download & extract Python embeddable into dist/python-embed/
   4. Run Inno Setup -> AgelClaw-Setup-{version}.exe
 
@@ -31,6 +31,7 @@ from urllib.request import urlopen
 
 # ── Configuration ──────────────────────────────────────────
 VERSION = "3.1.0"
+NODE_VERSION = "22.12.0"         # Node.js portable for bundled npm
 PYTHON_EMBED_VERSION = "3.12.8"  # Python embeddable zip version
 
 ROOT = Path(__file__).parent.resolve()
@@ -148,22 +149,73 @@ def step_nuitka():
     print(f"  AgelClaw.exe: {size_mb:.1f} MB")
 
 
-def step_copy_mem_exe():
-    """Step 2: Copy AgelClaw.exe -> AgelClaw-Mem.exe."""
+def step_node_embed():
+    """Step 2: Download and extract Node.js portable."""
     print()
     print("=" * 60)
-    print("STEP 2: Creating AgelClaw-Mem.exe (copy)")
+    print("STEP 2: Bundling Node.js portable")
     print("=" * 60)
 
-    src_exe = DIST_DIR / "AgelClaw.exe"
-    dst_exe = DIST_DIR / "AgelClaw-Mem.exe"
+    node_dir = DIST_DIR / "node"
 
-    if not src_exe.exists():
-        print(f"ERROR: {src_exe} not found — run Nuitka step first")
+    if node_dir.exists() and (node_dir / "node.exe").exists():
+        print(f"  Already exists at {node_dir}")
+        return
+
+    url = f"https://nodejs.org/dist/v{NODE_VERSION}/node-v{NODE_VERSION}-win-x64.zip"
+    zip_path = BUILD_DIR / f"node-v{NODE_VERSION}-win-x64.zip"
+
+    if not zip_path.exists():
+        print(f"  Downloading {url} ...")
+        data = urlopen(url).read()
+        zip_path.write_bytes(data)
+        size_mb = len(data) / (1024 * 1024)
+        print(f"  Downloaded: {size_mb:.1f} MB")
+    else:
+        print(f"  Using cached {zip_path.name}")
+
+    # Extract to temp dir first (zip has top-level folder node-vX.X.X-win-x64/)
+    temp_extract = BUILD_DIR / "node_extract_tmp"
+    if temp_extract.exists():
+        shutil.rmtree(temp_extract)
+    temp_extract.mkdir(parents=True)
+
+    with zipfile.ZipFile(zip_path) as zf:
+        zf.extractall(temp_extract)
+
+    # Move contents up one level (strip the top-level folder)
+    top_folder = temp_extract / f"node-v{NODE_VERSION}-win-x64"
+    if not top_folder.exists():
+        # Fallback: find whatever top-level dir exists
+        subdirs = [d for d in temp_extract.iterdir() if d.is_dir()]
+        if subdirs:
+            top_folder = subdirs[0]
+        else:
+            print(f"ERROR: Unexpected zip structure in {zip_path}")
+            sys.exit(1)
+
+    node_dir.mkdir(parents=True, exist_ok=True)
+    for item in top_folder.iterdir():
+        dest = node_dir / item.name
+        if item.is_dir():
+            shutil.copytree(item, dest, dirs_exist_ok=True)
+        else:
+            shutil.copy2(item, dest)
+
+    # Cleanup temp
+    shutil.rmtree(temp_extract)
+
+    # Verify
+    if not (node_dir / "node.exe").exists():
+        print(f"ERROR: node.exe not found in {node_dir}")
+        sys.exit(1)
+    if not (node_dir / "npm.cmd").exists():
+        print(f"ERROR: npm.cmd not found in {node_dir}")
         sys.exit(1)
 
-    shutil.copy2(src_exe, dst_exe)
-    print(f"  Copied -> {dst_exe.name}")
+    print(f"  Extracted to {node_dir}")
+    node_size = sum(f.stat().st_size for f in node_dir.rglob("*") if f.is_file())
+    print(f"  Node.js size: {node_size / (1024 * 1024):.0f} MB")
 
 
 def step_python_embed():
@@ -251,6 +303,8 @@ def main():
                         help="Skip Nuitka compilation (reuse existing dist)")
     parser.add_argument("--skip-inno", action="store_true",
                         help="Skip Inno Setup (compile only)")
+    parser.add_argument("--skip-node", action="store_true",
+                        help="Skip Node.js portable download")
     parser.add_argument("--skip-embed", action="store_true",
                         help="Skip Python embeddable download")
     args = parser.parse_args()
@@ -266,7 +320,10 @@ def main():
     else:
         print("Skipping Nuitka (--skip-nuitka)")
 
-    step_copy_mem_exe()
+    if not args.skip_node:
+        step_node_embed()
+    else:
+        print("Skipping Node.js (--skip-node)")
 
     if not args.skip_embed:
         step_python_embed()
