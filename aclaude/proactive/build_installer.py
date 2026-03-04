@@ -30,7 +30,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 # ── Configuration ──────────────────────────────────────────
-VERSION = "3.1.0"
+VERSION = "3.1.1"
 NODE_VERSION = "22.12.0"         # Node.js portable for bundled npm
 PYTHON_EMBED_VERSION = "3.12.8"  # Python embeddable zip version
 

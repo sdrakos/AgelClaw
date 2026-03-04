@@ -3,7 +3,7 @@
 # Usage: curl -sL https://github.com/sdrakos/AgelClaw/releases/download/v3.1.0/install-linux.sh | sudo bash
 set -e
 
-VERSION="3.1.0"
+VERSION="3.1.1"
 INSTALL_DIR="/usr/local/lib/agelclaw"
 BIN_DIR="/usr/local/bin"
 REPO="sdrakos/AgelClaw"

@@ -6,7 +6,7 @@
 ; Or:    python build_installer.py
 
 #define MyAppName "AgelClaw"
-#define MyAppVersion "3.1.0"
+#define MyAppVersion "3.1.1"
 #define MyAppPublisher "AgelClaw"
 #define MyAppURL "https://github.com/sdrakos/AgelClaw"
 #define MyAppExeName "AgelClaw.exe"
@@ -38,7 +38,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
-Name: "addtopath"; Description: "Add AgelClaw to PATH"; GroupDescription: "System:"; Flags: checked
+Name: "addtopath"; Description: "Add AgelClaw to PATH"; GroupDescription: "System:"
 Name: "autostart"; Description: "Start AgelClaw daemon on login"; GroupDescription: "System:"; Flags: unchecked
 
 [Files]

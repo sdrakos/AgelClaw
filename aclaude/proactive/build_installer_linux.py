@@ -27,7 +27,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 # ── Configuration ──────────────────────────────────────────
-VERSION = "3.1.0"
+VERSION = "3.1.1"
 NODE_VERSION = "22.12.0"
 
 ROOT = Path(__file__).parent.resolve()

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agelclaw"
-version = "3.1.0"
+version = "3.1.1"
 description = "Self-evolving AI agent with persistent memory, skills, and multi-provider routing"
 readme = "README.md"
 license = { text = "MIT" }
