@@ -66,9 +66,22 @@ cd proactive
 python build_installer.py                  # Full build: Nuitka + embed + Inno Setup
 python build_installer.py --skip-nuitka    # Re-run Inno Setup only
 # Output: build/installer/AgelClaw-Setup-3.1.0.exe
+
+# ── Build Linux release ──
+pip install nuitka ordered-set zstandard   # Prerequisites
+sudo apt install patchelf ccache           # Linux build deps
+cd proactive
+python build_installer_linux.py            # Full build: Nuitka + Node.js + tarball
+python build_installer_linux.py --skip-nuitka  # Reuse existing dist
+# Output: build/agelclaw-3.1.0-linux-x86_64.tar.gz
+
+# ── Install on Linux VPS (end users) ──
+curl -sL https://github.com/sdrakos/AgelClaw/releases/download/v3.1.0/install-linux.sh | sudo bash
+agelclaw init && agelclaw setup
+systemctl --user enable --now agelclaw     # Auto-start daemon
 ```
 
-**No test suite or linting.** There is no pytest, ruff, mypy, or CI/CD configured. The `proactive/tests/` directory exists but is empty.
+**No test suite or linting.** There is no pytest, ruff, mypy, or CI/CD configured. The `proactive/tests/` directory exists but is empty. GitHub Actions CI builds release artifacts (Windows .exe + Linux tarball) on release publish.
 
 ### Memory & Subagent CLI
 
@@ -259,6 +272,12 @@ proactive/src/agelclaw/           # Python package (pip install)
 **Clean notifications.** Telegram notifications use the task's `result` field from `complete_task()` — not raw agent text with internal reasoning.
 
 **Windows installer (Nuitka + Inno Setup).** `build_installer.py` compiles the package with Nuitka `--standalone` into `AgelClaw.exe`, bundles Node.js 22 portable (for npm/Claude CLI), Python 3.12 embeddable (for MCP scripts), and runs Inno Setup → `AgelClaw-Setup-{version}.exe`. All runtime changes in `_nuitka_compat.py` behind `IS_COMPILED` guards — dev mode unchanged. See `proactive/INSTALLER_MANUAL.md`.
+
+**Linux installer (Nuitka + tarball).** `build_installer_linux.py` compiles the package with Nuitka `--standalone` → `agelclaw` (ELF binary), bundles Node.js 22 for Linux, creates `agelclaw-mem` symlink (filename-based dispatch), and packages into `agelclaw-{version}-linux-x86_64.tar.gz`. No Python embed needed — MCP scripts use system `python3`. `install-linux.sh` extracts to `/usr/local/lib/agelclaw/`, symlinks binaries to `/usr/local/bin/`, and copies systemd user service.
+
+**GitHub Actions CI.** `.github/workflows/build-release.yml` builds both Windows and Linux artifacts on `release: published` or manual `workflow_dispatch`. Artifacts uploaded to the GitHub Release automatically.
+
+**Linux auto-start (systemd).** `project.py`'s `init_project()` calls `_install_systemd_service()` on Linux, which copies `agelclaw.service` template to `~/.config/systemd/user/`. User enables with `systemctl --user enable --now agelclaw`.
 
 **Telegram notification splitting.** `send_telegram_notification()` splits long results into multiple messages (4096 char limit per message) instead of truncating.
 

@@ -1,0 +1,110 @@
+name: Build Release Artifacts
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        working-directory: proactive
+        run: |
+          pip install nuitka ordered-set zstandard
+          pip install -e ".[all]"
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y patchelf ccache
+
+      - name: Build Linux release
+        working-directory: proactive
+        run: python build_installer_linux.py
+
+      - name: Upload Linux tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-tarball
+          path: proactive/build/agelclaw-*-linux-x86_64.tar.gz
+
+      - name: Upload install script
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-install-script
+          path: proactive/install-linux.sh
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install build dependencies
+        working-directory: proactive
+        run: |
+          pip install nuitka ordered-set zstandard
+          pip install -e ".[all]"
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y
+
+      - name: Build Windows installer
+        working-directory: proactive
+        run: python build_installer.py
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: proactive/build/installer/AgelClaw-Setup-*.exe
+
+  upload-release:
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    steps:
+      - name: Download Linux tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-tarball
+          path: artifacts/
+
+      - name: Download install script
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-install-script
+          path: artifacts/
+
+      - name: Download Windows installer
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+          path: artifacts/
+
+      - name: Upload to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            artifacts/* \
+            --repo "${{ github.repository }}" \
+            --clobber

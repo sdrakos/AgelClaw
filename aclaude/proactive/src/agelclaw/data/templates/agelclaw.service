@@ -1,0 +1,14 @@
+[Unit]
+Description=AgelClaw Agent Daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/agelclaw daemon
+WorkingDirectory=%h/.agelclaw
+Restart=always
+RestartSec=5
+Environment=PATH=/usr/local/lib/agelclaw/node/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target

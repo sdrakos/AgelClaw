@@ -227,9 +227,11 @@ def init_project(path: Path | str | None = None) -> Path:
         if src.exists() and not dst.exists():
             shutil.copy2(src, dst)
 
-    # Install auto-start daemon on Windows login
+    # Install auto-start daemon
     if sys.platform == "win32":
         _install_startup_script(project)
+    elif sys.platform.startswith("linux"):
+        _install_systemd_service(project)
 
     return project
 
@@ -268,3 +270,28 @@ def _install_startup_script(project: Path) -> None:
         bat.write_text(bat_content, encoding="utf-8")
     except Exception:
         pass  # Non-critical — don't fail init if startup script can't be created
+
+
+def _install_systemd_service(project: Path) -> None:
+    """Copy the systemd user service template to ~/.config/systemd/user/.
+
+    Only copies if the file doesn't already exist. Non-critical: failure
+    doesn't block init.
+    """
+    try:
+        systemd_dir = Path.home() / ".config" / "systemd" / "user"
+        service_file = systemd_dir / "agelclaw.service"
+        if service_file.exists():
+            return
+
+        # Find the template
+        template = get_templates_dir() / "agelclaw.service"
+        if not template.exists():
+            return
+
+        systemd_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(template, service_file)
+        print(f"  Systemd service installed: {service_file}")
+        print("  Enable with: systemctl --user enable --now agelclaw")
+    except Exception:
+        pass  # Non-critical
