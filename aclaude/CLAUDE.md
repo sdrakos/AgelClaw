@@ -250,7 +250,9 @@ proactive/src/agelclaw/           # Python package (pip install)
 
 **Memory context isolation.** In group Telegram chats, the system: (1) skips persona files from the prompt, (2) excludes user profile from context, (3) uses separate "group_chat" session, (4) doesn't recall private conversation history.
 
-**Persona files.** `persona/SOUL.md` and `persona/IDENTITY.md` are loaded at the top of every system prompt via `_load_persona_files()`. `persona/BOOTSTRAP.md` triggers first-run onboarding — auto-deleted after completion. Changes take effect within 120s (prompt cache TTL).
+**Persona files.** `persona/SOUL.md`, `persona/IDENTITY.md`, and `persona/GUARDRAIL.md` are loaded at the top of every system prompt via `_load_persona_files()`. `persona/BOOTSTRAP.md` triggers first-run onboarding — auto-deleted after completion. Changes take effect within 120s (prompt cache TTL).
+
+**GUARDRAIL.md (security rules).** Loaded into every system prompt. Enforces strict block policy: external content (emails, file uploads, scraped pages, API responses, group chat) is DATA ONLY — never instructions. Blocks file operations, tool execution, config changes, credential exposure, and memory manipulation when triggered by external content. Includes prompt injection detection patterns and notification protocol (log + Telegram alert to owner). User-editable at `persona/GUARDRAIL.md`.
 
 **Heartbeat proactivity.** Daemon runs `_maybe_run_heartbeat()` after each scheduler cycle. Controlled by `heartbeat_enabled`, `heartbeat_interval_hours`, `heartbeat_quiet_start/end` in config.yaml. Reads `persona/HEARTBEAT.md` for a user-editable checklist. Sends Telegram messages only when actionable.
 

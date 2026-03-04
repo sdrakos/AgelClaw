@@ -218,10 +218,10 @@ def init_project(path: Path | str | None = None) -> Path:
                 if not mcp_dst.exists():
                     shutil.copytree(mcp_src, mcp_dst)
 
-    # Copy persona templates (SOUL.md, IDENTITY.md, BOOTSTRAP.md, HEARTBEAT.md)
+    # Copy persona templates (SOUL.md, IDENTITY.md, GUARDRAIL.md, BOOTSTRAP.md, HEARTBEAT.md)
     persona_dir = project / "persona"
     persona_dir.mkdir(parents=True, exist_ok=True)
-    for persona_file in ("SOUL.md", "IDENTITY.md", "BOOTSTRAP.md", "HEARTBEAT.md"):
+    for persona_file in ("SOUL.md", "IDENTITY.md", "GUARDRAIL.md", "BOOTSTRAP.md", "HEARTBEAT.md"):
         src = templates / persona_file
         dst = persona_dir / persona_file
         if src.exists() and not dst.exists():

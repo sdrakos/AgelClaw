@@ -704,7 +704,7 @@ def _load_persona_files() -> str:
     persona_dir = get_persona_dir()
     parts = []
 
-    for filename in ("SOUL.md", "IDENTITY.md"):
+    for filename in ("SOUL.md", "IDENTITY.md", "GUARDRAIL.md"):
         filepath = persona_dir / filename
         if filepath.exists():
             try:
