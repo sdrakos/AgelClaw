@@ -68,23 +68,18 @@ def step_nuitka():
     cmd = [
         sys.executable, "-m", "nuitka",
         "--standalone",
+        "--zig",
         "--assume-yes-for-downloads",
         f"--jobs={nproc}",
         f"--output-dir={BUILD_DIR}",
-        "--output-filename=agelclaw",
         "--include-package=agelclaw",
         "--include-package-data=agelclaw",
         f"--include-data-dir={SRC / 'data'}=agelclaw/data",
         f"--nofollow-import-to={excluded}",
-        f"--company-name=AgelClaw",
-        f"--product-name=AgelClaw",
-        f"--file-version={VERSION}",
-        f"--product-version={VERSION}",
-        "--file-description=AgelClaw AI Agent",
         str(entry_point),
     ]
 
-    print(f"Running: {' '.join(str(c) for c in cmd[:5])} ...")
+    print(f"Running: {' '.join(str(c) for c in cmd)}")
     result = subprocess.run(cmd, cwd=ROOT)
     if result.returncode != 0:
         print("ERROR: Nuitka compilation failed!")
@@ -99,20 +94,16 @@ def step_nuitka():
                 print(f"  Renaming {actual_dist.name} -> AgelClaw.dist")
                 actual_dist.rename(DIST_DIR)
 
-    # Find the binary (may be named cli_entry or agelclaw)
+    # Find the binary — Nuitka names it after the source file on Linux
     binary = DIST_DIR / "agelclaw"
     if not binary.exists():
-        alt_binary = DIST_DIR / "cli_entry.bin"
-        if alt_binary.exists():
-            print("  Renaming cli_entry.bin -> agelclaw")
-            alt_binary.rename(binary)
-
-    if not binary.exists():
-        # Try without extension
-        alt_binary = DIST_DIR / "cli_entry"
-        if alt_binary.exists():
-            print("  Renaming cli_entry -> agelclaw")
-            alt_binary.rename(binary)
+        # Try all possible names Nuitka might use
+        for alt_name in ["cli_entry.bin", "cli_entry", "AgelClaw.bin", "AgelClaw"]:
+            alt_binary = DIST_DIR / alt_name
+            if alt_binary.exists():
+                print(f"  Renaming {alt_name} -> agelclaw")
+                alt_binary.rename(binary)
+                break
 
     if not binary.exists():
         print(f"ERROR: Expected output not found at {binary}")

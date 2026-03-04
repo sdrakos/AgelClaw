@@ -31,6 +31,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y patchelf ccache
 
+      - name: Debug info
+        working-directory: aclaude/proactive
+        run: |
+          python -m nuitka --version || true
+          ls -la src/agelclaw/data/ || true
+          python -c "import agelclaw; print(agelclaw.__version__)" || true
+
       - name: Build Linux release
         working-directory: aclaude/proactive
         run: python build_installer_linux.py
