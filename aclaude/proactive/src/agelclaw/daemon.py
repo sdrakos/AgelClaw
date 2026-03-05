@@ -80,7 +80,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler(LOG_DIR / "daemon.log"),
+        logging.FileHandler(LOG_DIR / "daemon.log", encoding="utf-8"),
     ],
 )
 log = logging.getLogger("agent-daemon")
@@ -265,7 +265,7 @@ def send_task_notification(task_id: int, task_title: str, status: str, result: s
             stderr=subprocess.PIPE,
             creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         )
-        log.info(f"✉️ Notification queued for task #{task_id}")
+        log.info(f"Notification queued for task #{task_id}")
 
     except Exception as e:
         log.error(f"Failed to send notification for task #{task_id}: {e}")
@@ -2195,7 +2195,7 @@ if __name__ == "__main__":
     memory.kv_set("daemon_last_start", datetime.now().isoformat())
     memory.kv_set("daemon_status", "running")
 
-    log.info("🤖 Agent Daemon v2 starting (parallel execution)")
+    log.info("Agent Daemon v2 starting (parallel execution)")
     log.info(f"   API: http://localhost:{API_PORT}")
     log.info(f"   Interval: {CHECK_INTERVAL}s")
     log.info(f"   Max concurrent: {MAX_CONCURRENT_TASKS}")
