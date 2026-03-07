@@ -255,7 +255,9 @@ proactive/src/agelclaw/           # Python package (pip install)
 
 **Port-aware service startup.** `agent_run.py` (dev runner) checks if a service's port is already in use before starting it. If the daemon is already running on `:8420` or the API server on `:8000`, it skips that service instead of crashing with `Address already in use`.
 
-**Persona files.** `persona/SOUL.md` (values & behavior) and `persona/IDENTITY.md` (name, vibe, user info) are loaded at the top of every system prompt via `_load_persona_files()`. `persona/BOOTSTRAP.md` triggers first-run onboarding — the agent guides the user through setup, updates the profile and IDENTITY.md, then deletes BOOTSTRAP.md. All files are user-editable. Changes take effect within 120s (prompt cache TTL).
+**Persona files.** `persona/SOUL.md` (values & behavior), `persona/IDENTITY.md` (name, vibe, user info), and `persona/GUARDRAIL.md` (security rules) are loaded at the top of every system prompt via `_load_persona_files()`. `persona/BOOTSTRAP.md` triggers first-run onboarding — auto-deleted after completion. All files are user-editable. Changes take effect within 120s (prompt cache TTL).
+
+**System prompt file offloading (Windows).** The Claude Agent SDK passes the system prompt as a CLI argument. Windows has a 32,767 char command line limit. When the prompt exceeds 28,000 chars, `build_agent_options()` writes it to `persona/SYSTEM_PROMPT.md` and passes a short boot-loader prompt instead. The agent reads the full prompt via Read on its first turn. This file is auto-generated (not user-editable).
 
 **Heartbeat proactivity.** Daemon runs `_maybe_run_heartbeat()` after each scheduler cycle. Controlled by `heartbeat_enabled`, `heartbeat_interval_hours`, `heartbeat_quiet_start/end` in config.yaml. Reads `persona/HEARTBEAT.md` for a user-editable checklist. State tracked via `kv_store` key `last_heartbeat_at`. Sends Telegram messages only when there's something actionable.
 

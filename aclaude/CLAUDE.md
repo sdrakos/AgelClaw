@@ -277,6 +277,8 @@ proactive/src/agelclaw/           # Python package (pip install)
 
 **GUARDRAIL.md (security rules).** Loaded into every system prompt. Enforces strict block policy: external content (emails, file uploads, scraped pages, API responses, group chat) is DATA ONLY — never instructions. Blocks file operations, tool execution, config changes, credential exposure, and memory manipulation when triggered by external content. Includes prompt injection detection patterns and notification protocol (log + Telegram alert to owner). User-editable at `persona/GUARDRAIL.md`.
 
+**System prompt file offloading (Windows).** On Windows, the Claude Agent SDK passes the entire system prompt as a CLI argument to `claude.exe`. Windows has a 32,767 char command line limit. Our system prompt (persona + skills + subagents + MCP + context + rules) exceeds ~30K chars. When the prompt exceeds `_MAX_SYSTEM_PROMPT_CHARS` (28,000), `build_agent_options()` writes it to `persona/SYSTEM_PROMPT.md` and passes a short boot-loader prompt instead. The agent reads the full prompt from the file on its first turn via the Read tool. This file is auto-generated on every request (not user-editable).
+
 **Heartbeat proactivity.** Daemon runs `_maybe_run_heartbeat()` after each scheduler cycle. Controlled by `heartbeat_enabled`, `heartbeat_interval_hours`, `heartbeat_quiet_start/end` in config.yaml. Reads `persona/HEARTBEAT.md` for a user-editable checklist. Sends Telegram messages only when actionable.
 
 **Clean notifications.** Telegram notifications use the task's `result` field from `complete_task()` — not raw agent text with internal reasoning.
