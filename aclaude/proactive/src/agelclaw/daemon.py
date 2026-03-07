@@ -59,7 +59,7 @@ from agelclaw.skill_tools import ALL_SKILL_TOOLS
 
 from agelclaw.core.config import load_config
 from agelclaw.core.agent_router import AgentRouter, Provider
-from agelclaw.agent_config import get_agent, get_system_prompt, AGENT_TOOLS, ALLOWED_TOOLS, _scan_mcp_servers, _build_mcp_tool_wildcards, load_mcp_server_config
+from agelclaw.agent_config import get_agent, get_system_prompt, AGENT_TOOLS, ALLOWED_TOOLS, _scan_mcp_servers, _build_mcp_tool_wildcards, load_mcp_server_config, safe_system_prompt
 
 _cfg = load_config()
 CHECK_INTERVAL = _cfg.get("check_interval", 300)
@@ -86,25 +86,6 @@ logging.basicConfig(
 log = logging.getLogger("agent-daemon")
 
 memory = Memory()
-
-# Windows command line limit: 32,767 chars
-# Reserve ~4000 for MCP config, tools, flags
-_MAX_SYSTEM_PROMPT_CHARS = 28_000
-
-
-def _safe_system_prompt(prompt: str) -> str:
-    """On Windows, offload large system prompts to a file to avoid CLI length limits."""
-    if sys.platform == "win32" and len(prompt) > _MAX_SYSTEM_PROMPT_CHARS:
-        prompt_file = get_persona_dir() / "SYSTEM_PROMPT.md"
-        prompt_file.write_text(prompt, encoding="utf-8")
-        return (
-            f"Your full system prompt is in: {prompt_file}\n"
-            f"CRITICAL: Before doing ANYTHING, read that file with the Read tool to load your instructions.\n"
-            f"It contains your persona, available skills, subagents, MCP tools, rules, and context.\n"
-            f"Do NOT respond until you have read and understood the full system prompt.\n"
-        )
-    return prompt
-
 
 # Event to wake up the daemon immediately
 wake_event = asyncio.Event()
@@ -617,7 +598,7 @@ async def execute_single_task(task: dict, cycle_session: str):
                     allowed += _build_mcp_tool_wildcards(mcp_configs)
 
                 options = ClaudeAgentOptions(
-                    system_prompt=_safe_system_prompt(_get_daemon_prompt()),
+                    system_prompt=safe_system_prompt(_get_daemon_prompt()),
                     allowed_tools=allowed,
                     setting_sources=["user", "project"],
                     permission_mode="bypassPermissions",
@@ -1102,7 +1083,7 @@ async def execute_subagent_task(task: dict, cycle_session: str):
                     log.info(f"[Subagent '{subagent_name}' Task #{task_id}] Injected MCP tool listing ({len(mcp_configs)} servers)")
 
                 options = ClaudeAgentOptions(
-                    system_prompt=_safe_system_prompt(enriched_body),
+                    system_prompt=safe_system_prompt(enriched_body),
                     allowed_tools=allowed,
                     permission_mode="bypassPermissions",
                     cwd=str(proactive_dir),
@@ -1794,7 +1775,7 @@ async def _maybe_run_heartbeat():
                 hb_allowed += _build_mcp_tool_wildcards(mcp_configs)
 
             options = ClaudeAgentOptions(
-                system_prompt=_safe_system_prompt(_get_daemon_prompt()),
+                system_prompt=safe_system_prompt(_get_daemon_prompt()),
                 allowed_tools=hb_allowed,
                 setting_sources=["user", "project"],
                 permission_mode="bypassPermissions",

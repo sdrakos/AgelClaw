@@ -898,26 +898,27 @@ def get_system_prompt_for_channel(channel_type: str = "private") -> str:
     return get_system_prompt()
 
 
-def _write_system_prompt_to_file(prompt: str) -> str:
-    """Write system prompt to a stable file and return a short boot loader.
-    On Windows, the total CLI command line cannot exceed 32,767 chars.
-    Large system prompts (persona + context + skills + subagents + MCP) easily
-    exceed this limit. We write the full prompt to a file in the persona dir
-    and inject a boot loader that reads it at runtime via the Read tool.
-    """
-    prompt_file = get_persona_dir() / "SYSTEM_PROMPT.md"
-    prompt_file.write_text(prompt, encoding="utf-8")
-    return (
-        f"Your full system prompt is in: {prompt_file}\n"
-        f"CRITICAL: Before doing ANYTHING, read that file with the Read tool to load your instructions.\n"
-        f"It contains your persona, available skills, subagents, MCP tools, rules, and context.\n"
-        f"Do NOT respond until you have read and understood the full system prompt.\n"
-    )
-
-
 # Windows command line limit: 32,767 chars total
 # Reserve ~4000 for MCP config, tools, flags, etc.
 _MAX_SYSTEM_PROMPT_CHARS = 28_000
+
+
+def safe_system_prompt(prompt: str) -> str:
+    """On Windows, offload large system prompts to a file to avoid CLI length limits.
+    Used by all Claude SDK call sites: telegram, web, CLI, daemon, subagents, heartbeat.
+    On non-Windows or short prompts, returns the prompt unchanged.
+    """
+    import sys as _sys
+    if _sys.platform == "win32" and len(prompt) > _MAX_SYSTEM_PROMPT_CHARS:
+        prompt_file = get_persona_dir() / "SYSTEM_PROMPT.md"
+        prompt_file.write_text(prompt, encoding="utf-8")
+        return (
+            f"Your full system prompt is in: {prompt_file}\n"
+            f"CRITICAL: Before doing ANYTHING, read that file with the Read tool to load your instructions.\n"
+            f"It contains your persona, available skills, subagents, MCP tools, rules, and context.\n"
+            f"Do NOT respond until you have read and understood the full system prompt.\n"
+        )
+    return prompt
 
 
 def build_agent_options(max_turns: int = 30, channel_type: str = "private",
@@ -937,13 +938,7 @@ def build_agent_options(max_turns: int = 30, channel_type: str = "private",
     if mcp_configs:
         allowed += _build_mcp_tool_wildcards(mcp_configs)
 
-    system_prompt = get_system_prompt_for_channel(channel_type)
-
-    # On Windows, CLI command line has a 32,767 char limit.
-    # If system prompt is too large, offload to temp file.
-    import sys as _sys
-    if _sys.platform == "win32" and len(system_prompt) > _MAX_SYSTEM_PROMPT_CHARS:
-        system_prompt = _write_system_prompt_to_file(system_prompt)
+    system_prompt = safe_system_prompt(get_system_prompt_for_channel(channel_type))
 
     opts = ClaudeAgentOptions(
         system_prompt=system_prompt,
