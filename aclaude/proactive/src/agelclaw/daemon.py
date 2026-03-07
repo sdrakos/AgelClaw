@@ -911,12 +911,63 @@ async def execute_subagent_task(task: dict, cycle_session: str):
         })
         send_telegram_notification(task_id, task_title, "started", f"Started executing (subagent: {subagent_name})...")
 
+        # Resolve subagent tools early (needed by task_prompt TOOL GUARD)
+        sa_tools = sa.get("tools") or AGENT_TOOLS
+
         # Build focused task prompt
         context = memory.build_context_summary()
         task_desc = task.get("description", "")
         task_priority = task.get("priority", 5)
         task_category = task.get("category", "general")
         task_folder = memory.get_task_folder(task_id)
+
+        # Subagents with MCP servers skip skill-first (they have dedicated tools)
+        sa_has_mcp = bool(sa.get("mcp_servers"))
+
+        if sa_has_mcp:
+            execution_section = (
+                f"## MCP-FIRST EXECUTION\n"
+                f"This subagent has dedicated MCP tools. Use them directly — do NOT search for skills.\n\n"
+            )
+            steps_section = (
+                f"## STEPS (follow exactly)\n"
+                f"1. `agelclaw-mem start_task {task_id}`\n"
+                f"2. Use your MCP tools (mcp__*__) to execute the task\n"
+                f"3. Save outputs to {task_folder}\n"
+                f"4. `agelclaw-mem complete_task {task_id} \"<result in Greek>\"`\n"
+                f"5. STOP. Do not continue after complete_task.\n\n"
+            )
+        else:
+            execution_section = (
+                f"## SKILL-FIRST EXECUTION (MANDATORY — follow this before ANY work)\n"
+                f"Before executing the task:\n"
+                f"1. Run: `agelclaw-mem find_skill \"<task description>\"`\n"
+                f"2. If skill found -> run: `agelclaw-mem skill_content <name>` -> follow its instructions\n"
+                f"3. If NO skill found:\n"
+                f"   a. Read the skill-creator guide: `cat .Claude/Skills/skill-creator/SKILL.md`\n"
+                f"   b. Research the topic using available tools (Bash, Read, WebSearch)\n"
+                f"   c. Create skill: `agelclaw-mem create_skill <name> \"<desc>\" \"<body>\"`\n"
+                f"   d. Add scripts: `agelclaw-mem add_script <name> <file> \"<code>\"`\n"
+                f"   e. Add references if needed: `agelclaw-mem add_ref <name> <file> \"<content>\"`\n"
+                f"   f. Execute the task using the newly created skill\n"
+                f"4. After execution: `agelclaw-mem update_skill <name> \"<updated body>\"` if improvements found\n\n"
+                f"## SKILL CREATION RULES\n"
+                f"- Create skills proactively — every new domain should get a skill\n"
+                f"- Follow the skill-creator guide at `.Claude/Skills/skill-creator/SKILL.md`\n"
+                f"- Scripts must be self-contained, handle errors, and work on Windows\n"
+                f"- Test scripts after creating them (run with python)\n"
+                f"- Include real working examples in skill body, not placeholders\n"
+                f"- For long code: use Write tool to create files, then add_script with a short wrapper\n\n"
+            )
+            steps_section = (
+                f"## STEPS (follow exactly)\n"
+                f"1. `agelclaw-mem start_task {task_id}`\n"
+                f"2. SKILL-FIRST: find or create the right skill (see above)\n"
+                f"3. Execute the task using the skill's scripts and instructions\n"
+                f"4. Save outputs to {task_folder}\n"
+                f"5. `agelclaw-mem complete_task {task_id} \"<result in Greek>\"`\n"
+                f"6. STOP. Do not continue after complete_task.\n\n"
+            )
 
         task_prompt = (
             f"SUBAGENT TASK EXECUTION: {session_id}\n"
@@ -932,26 +983,8 @@ async def execute_subagent_task(task: dict, cycle_session: str):
             f"{context}\n\n"
             f"---\n"
             f"WORKING DIR: {proactive_dir}\n\n"
-            f"## SKILL-FIRST EXECUTION (MANDATORY — follow this before ANY work)\n"
-            f"Before executing the task:\n"
-            f"1. Run: `agelclaw-mem find_skill \"<task description>\"`\n"
-            f"2. If skill found -> run: `agelclaw-mem skill_content <name>` -> follow its instructions\n"
-            f"3. If NO skill found:\n"
-            f"   a. Read the skill-creator guide: `cat .Claude/Skills/skill-creator/SKILL.md`\n"
-            f"   b. Research the topic using available tools (Bash, Read, WebSearch)\n"
-            f"   c. Create skill: `agelclaw-mem create_skill <name> \"<desc>\" \"<body>\"`\n"
-            f"   d. Add scripts: `agelclaw-mem add_script <name> <file> \"<code>\"`\n"
-            f"   e. Add references if needed: `agelclaw-mem add_ref <name> <file> \"<content>\"`\n"
-            f"   f. Execute the task using the newly created skill\n"
-            f"4. After execution: `agelclaw-mem update_skill <name> \"<updated body>\"` if improvements found\n\n"
-            f"## SKILL CREATION RULES\n"
-            f"- Create skills proactively — every new domain should get a skill\n"
-            f"- Follow the skill-creator guide at `.Claude/Skills/skill-creator/SKILL.md`\n"
-            f"- Scripts must be self-contained, handle errors, and work on Windows\n"
-            f"- Test scripts after creating them (run with python)\n"
-            f"- Include real working examples in skill body, not placeholders\n"
-            f"- For long code: use Write tool to create files, then add_script with a short wrapper\n\n"
-            f"## TOOL GUARD (CRITICAL)\n"
+            + execution_section
+            + f"## TOOL GUARD (CRITICAL)\n"
             f"NEVER use these tools — they do NOT exist and will freeze your execution:\n"
             f"TodoWrite, TodoRead, Task, EnterPlanMode, AskUserQuestion, ExitPlanMode, TaskCreate, TaskUpdate, ToolSearch.\n"
             f"Available tools: {', '.join(sa_tools)} + any mcp__*__ tools listed in your instructions.\n\n"
@@ -965,14 +998,8 @@ async def execute_subagent_task(task: dict, cycle_session: str):
             f"- Write in GREEK, in natural human language\n"
             f"- Write ONLY the outcome\n"
             f"- NO technical steps, NO English\n\n"
-            f"## STEPS (follow exactly)\n"
-            f"1. `agelclaw-mem start_task {task_id}`\n"
-            f"2. SKILL-FIRST: find or create the right skill (see above)\n"
-            f"3. Execute the task using the skill's scripts and instructions\n"
-            f"4. Save outputs to {task_folder}\n"
-            f"5. `agelclaw-mem complete_task {task_id} \"<result in Greek>\"`\n"
-            f"6. STOP. Do not continue after complete_task.\n\n"
-            f"Use `agelclaw-mem <command> [args]` via Bash for memory/skill operations."
+            + steps_section
+            + f"Use `agelclaw-mem <command> [args]` via Bash for memory/skill operations."
         )
 
         # Route to provider
@@ -986,9 +1013,6 @@ async def execute_subagent_task(task: dict, cycle_session: str):
         if task_provider == "auto":
             task_provider = None
         route = _router.route(task_type=sa.get("task_type", task_category), prefer=task_provider)
-
-        # Resolve subagent tools
-        sa_tools = sa.get("tools") or AGENT_TOOLS
 
         full_response = []
         tools_used = []
@@ -1023,8 +1047,10 @@ async def execute_subagent_task(task: dict, cycle_session: str):
                     "text": result[:500],
                 })
             else:
-                # Claude path — use AgentDefinition for isolated subagent context
-                log.info(f"[Subagent '{subagent_name}' Task #{task_id}] Using Claude with AgentDefinition")
+                # Claude path — direct execution with subagent prompt as system prompt.
+                # AgentDefinition doesn't pass MCP tool access to nested subagents,
+                # so we run the subagent directly at top level with MCP servers loaded.
+                log.info(f"[Subagent '{subagent_name}' Task #{task_id}] Using Claude (direct, no AgentDefinition)")
 
                 # Load MCP servers: auto-loaded + subagent-specific
                 mcp_configs, _ = _scan_mcp_servers()
@@ -1035,35 +1061,27 @@ async def execute_subagent_task(task: dict, cycle_session: str):
                         if cfg:
                             mcp_configs[mcp_name] = cfg
 
-                allowed = list(AGENT_TOOLS) + ["Task"]
+                allowed = list(sa_tools)
                 if mcp_configs:
                     allowed += _build_mcp_tool_wildcards(mcp_configs)
 
-                # Inject MCP tool listing into subagent prompt so it can call them directly
+                # Inject MCP tool listing + tool guard into subagent prompt
                 mcp_tools_section = _get_mcp_tools_for_prompt(mcp_configs)
-                enriched_body = sa["body"]
+                tool_guard = (
+                    "\n\n## TOOL GUARD (CRITICAL)\n"
+                    "NEVER use these tools — they do NOT exist and will freeze your execution:\n"
+                    "TodoWrite, TodoRead, Task, EnterPlanMode, AskUserQuestion, ExitPlanMode, "
+                    "TaskCreate, TaskUpdate, ToolSearch.\n"
+                    f"Available tools: {', '.join(sa_tools)} + any mcp__*__ tools listed below.\n"
+                )
+                enriched_body = sa["body"] + tool_guard
                 if mcp_tools_section:
-                    enriched_body += "\n\n" + mcp_tools_section
+                    enriched_body += "\n" + mcp_tools_section
                     log.info(f"[Subagent '{subagent_name}' Task #{task_id}] Injected MCP tool listing ({len(mcp_configs)} servers)")
 
-                # Minimal outer prompt — the subagent has its own detailed prompt.
-                # Full _get_daemon_prompt() is too large for Windows CLI limit (32K chars).
-                outer_prompt = (
-                    f"You are a task executor. Delegate the task to the '{subagent_name}' agent. "
-                    f"Do not execute the task yourself — always use the subagent."
-                )
-
                 options = ClaudeAgentOptions(
-                    system_prompt=outer_prompt,
+                    system_prompt=enriched_body,
                     allowed_tools=allowed,
-                    agents={
-                        subagent_name: AgentDefinition(
-                            description=sa["description"],
-                            prompt=enriched_body,
-                            tools=sa_tools,
-                            model="sonnet",
-                        ),
-                    },
                     permission_mode="bypassPermissions",
                     cwd=str(proactive_dir),
                     max_turns=sa_max_turns,
@@ -1071,7 +1089,7 @@ async def execute_subagent_task(task: dict, cycle_session: str):
                 if mcp_configs:
                     options.mcp_servers = mcp_configs
 
-                delegation_prompt = f"Use the {subagent_name} agent to execute this task:\n\n{task_prompt}"
+                delegation_prompt = task_prompt
 
                 last_progress_log = task_start
                 last_activity = datetime.now()

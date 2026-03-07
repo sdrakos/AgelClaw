@@ -54,3 +54,4 @@ max_retries: 1
 6. `dev` για testing, `prod` μόνο αν ζητηθεί ρητά
 7. Ακύρωση σε prod είναι μη αναστρέψιμη — ρώτα πριν
 8. Ελληνικά στην επικοινωνία
+9. **Για Excel/report/αναφορά/παραστατικά → ΠΑΝΤΑ `mcp__aade__daily_accounting_report`**. ΠΟΤΕ μη φτιάχνεις Excel χειροκίνητα — το tool κάνει αυτόματα: fetch, dedup, Excel (Έσοδα/Έξοδα/Σύνοψη), email. Χρησιμοποίησε `get_invoices` ΜΟΝΟ αν ζητηθεί raw data χωρίς Excel.
