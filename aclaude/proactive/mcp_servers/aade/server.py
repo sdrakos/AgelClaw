@@ -1,0 +1,834 @@
+"""
+AADE myDATA MCP Server
+======================
+Invoice management and multi-AFM credential storage via the Greek tax
+authority REST API.
+
+Tools: send_invoice, get_invoices, cancel_invoice, income_summary,
+       expenses_summary, generate_xml, add_credentials, list_credentials,
+       remove_credentials, set_default_afm
+"""
+import asyncio
+import json
+import os
+import sqlite3
+import sys
+from datetime import date, datetime
+from decimal import Decimal
+from pathlib import Path
+from typing import Optional
+
+import httpx
+from lxml import etree
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
+from mcp.types import Tool, TextContent
+
+
+# ── .env loading (search upward) ──
+
+def _find_env():
+    """Search parent directories for .env file."""
+    d = Path(__file__).resolve().parent
+    for _ in range(10):
+        for name in ("proactive/.env", ".env"):
+            env_path = d / name
+            if env_path.exists():
+                return env_path
+        d = d.parent
+    return None
+
+
+def _load_env():
+    env_path = _find_env()
+    if env_path:
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                k, v = k.strip(), v.strip().strip("'\"")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+
+
+_load_env()
+
+
+# ── AADE API Configuration ──
+
+ENVIRONMENTS = {
+    "dev": "https://mydataapidev.aade.gr",
+    "prod": "https://mydatapi.aade.gr/myDATA",
+}
+
+NS_INV = "http://www.aade.gr/myDATA/invoice/v1.0"
+# Dev API uses https:// namespace URIs for classification elements
+NS_ICLS = "https://www.aade.gr/myDATA/incomeClassificaton/v1.0"
+NS_ECLS = "https://www.aade.gr/myDATA/expensesClassificaton/v1.0"
+
+NAMESPACES = {
+    None: NS_INV,
+    "icls": NS_ICLS,
+    "ecls": NS_ECLS,
+}
+
+VAT_RATES = {
+    1: Decimal("0.24"),
+    2: Decimal("0.13"),
+    3: Decimal("0.06"),
+    4: Decimal("0.17"),
+    5: Decimal("0.09"),
+    6: Decimal("0.04"),
+    7: Decimal("0"),
+    8: Decimal("0"),
+}
+
+DEFAULT_DB_PATH = Path.home() / ".agelclaw" / "data" / "mydata_credentials.db"
+
+
+# ── Credential Store (SQLite) ──
+
+class CredentialStore:
+    def __init__(self, db_path: Optional[Path] = None):
+        self.db_path = db_path or DEFAULT_DB_PATH
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_db()
+
+    def _init_db(self):
+        with sqlite3.connect(str(self.db_path)) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS credentials (
+                    afm TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    subscription_key TEXT NOT NULL,
+                    env TEXT DEFAULT 'dev',
+                    country TEXT DEFAULT 'GR',
+                    branch INTEGER DEFAULT 0,
+                    label TEXT DEFAULT '',
+                    created_at TEXT DEFAULT (datetime('now')),
+                    updated_at TEXT DEFAULT (datetime('now'))
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+            """)
+
+    def add(self, afm, user_id, subscription_key, env="dev", country="GR", branch=0, label=""):
+        with sqlite3.connect(str(self.db_path)) as conn:
+            conn.execute("""
+                INSERT INTO credentials (afm, user_id, subscription_key, env, country, branch, label, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                ON CONFLICT(afm) DO UPDATE SET
+                    user_id=excluded.user_id,
+                    subscription_key=excluded.subscription_key,
+                    env=excluded.env,
+                    country=excluded.country,
+                    branch=excluded.branch,
+                    label=excluded.label,
+                    updated_at=datetime('now')
+            """, (afm, user_id, subscription_key, env, country, branch, label))
+
+    def get(self, afm):
+        with sqlite3.connect(str(self.db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM credentials WHERE afm=?", (afm,)).fetchone()
+            return dict(row) if row else None
+
+    def list_all(self):
+        with sqlite3.connect(str(self.db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            return [dict(r) for r in conn.execute("SELECT afm, label, env, country, branch FROM credentials ORDER BY afm").fetchall()]
+
+    def remove(self, afm):
+        with sqlite3.connect(str(self.db_path)) as conn:
+            cur = conn.execute("DELETE FROM credentials WHERE afm=?", (afm,))
+            return cur.rowcount > 0
+
+    def set_default(self, afm):
+        with sqlite3.connect(str(self.db_path)) as conn:
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('default_afm', ?)", (afm,))
+
+    def get_default(self):
+        with sqlite3.connect(str(self.db_path)) as conn:
+            row = conn.execute("SELECT value FROM settings WHERE key='default_afm'").fetchone()
+            return row[0] if row else None
+
+
+cred_store = CredentialStore()
+
+
+# ── AADE HTTP Client ──
+
+class MyDataClient:
+    def __init__(self, user_id, subscription_key, issuer_vat, env="dev",
+                 issuer_country="GR", issuer_branch=0):
+        self.base_url = ENVIRONMENTS.get(env, ENVIRONMENTS["dev"])
+        self.headers = {
+            "aade-user-id": user_id,
+            "Ocp-Apim-Subscription-Key": subscription_key,
+            "Content-Type": "application/xml",
+        }
+        self.issuer_vat = issuer_vat
+        self.issuer_country = issuer_country
+        self.issuer_branch = issuer_branch
+        self._http = httpx.AsyncClient(timeout=30.0)
+
+    @classmethod
+    def from_env(cls):
+        return cls(
+            user_id=os.environ.get("MYDATA_USER_ID", ""),
+            subscription_key=os.environ.get("MYDATA_SUBSCRIPTION_KEY", ""),
+            issuer_vat=os.environ.get("ISSUER_VAT", ""),
+            env=os.environ.get("MYDATA_ENV", "dev"),
+            issuer_country=os.environ.get("ISSUER_COUNTRY", "GR"),
+            issuer_branch=int(os.environ.get("ISSUER_BRANCH", "0")),
+        )
+
+    @classmethod
+    def from_db(cls, afm):
+        cred = cred_store.get(afm)
+        if not cred:
+            raise ValueError(f"No credentials found for AFM {afm}")
+        return cls(
+            user_id=cred["user_id"],
+            subscription_key=cred["subscription_key"],
+            issuer_vat=afm,
+            env=cred["env"],
+            issuer_country=cred["country"],
+            issuer_branch=cred["branch"],
+        )
+
+    @classmethod
+    def from_db_or_env(cls, afm=None):
+        if afm:
+            return cls.from_db(afm)
+        default = cred_store.get_default()
+        if default:
+            cred = cred_store.get(default)
+            if cred:
+                return cls.from_db(default)
+        return cls.from_env()
+
+    async def close(self):
+        await self._http.aclose()
+
+    async def _post(self, endpoint, xml_data):
+        resp = await self._http.post(
+            f"{self.base_url}/{endpoint}",
+            headers=self.headers,
+            content=xml_data,
+        )
+        return resp.content
+
+    async def _get(self, endpoint, params=None):
+        resp = await self._http.get(
+            f"{self.base_url}/{endpoint}",
+            headers=self.headers,
+            params=params,
+        )
+        return resp.content
+
+    async def send_invoice_xml(self, xml_bytes):
+        return await self._post("SendInvoices", xml_bytes)
+
+    @staticmethod
+    def _to_aade_date(d):
+        """Convert YYYY-MM-DD to dd/MM/yyyy for AADE API."""
+        if not d:
+            return None
+        if "/" in d:
+            return d  # already dd/MM/yyyy
+        parts = d.split("-")
+        if len(parts) == 3:
+            return f"{parts[2]}/{parts[1]}/{parts[0]}"
+        return d
+
+    async def get_sent_invoices(self, mark=0, date_from=None, date_to=None):
+        params = {"mark": str(mark)}
+        df = self._to_aade_date(date_from)
+        dt = self._to_aade_date(date_to)
+        if df:
+            params["dateFrom"] = df
+        if dt:
+            params["dateTo"] = dt
+        data = await self._get("RequestTransmittedDocs", params)
+        return self._parse_invoices(data)
+
+    async def get_received_invoices(self, mark=0, date_from=None, date_to=None):
+        params = {"mark": str(mark)}
+        df = self._to_aade_date(date_from)
+        dt = self._to_aade_date(date_to)
+        if df:
+            params["dateFrom"] = df
+        if dt:
+            params["dateTo"] = dt
+        data = await self._get("RequestDocs", params)
+        return self._parse_invoices(data)
+
+    async def cancel_invoice(self, mark):
+        params = {"mark": str(mark)}
+        data = await self._get("CancelInvoice", params)
+        return self._parse_response(data)
+
+    async def get_income(self, date_from, date_to):
+        return await self._get("RequestMyIncome", {
+            "dateFrom": self._to_aade_date(date_from),
+            "dateTo": self._to_aade_date(date_to),
+        })
+
+    async def get_expenses(self, date_from, date_to):
+        return await self._get("RequestMyExpenses", {
+            "dateFrom": self._to_aade_date(date_from),
+            "dateTo": self._to_aade_date(date_to),
+        })
+
+    def _parse_invoices(self, xml_data):
+        """Parse invoice list from AADE response XML."""
+        try:
+            root = etree.fromstring(xml_data)
+        except Exception:
+            return [{"raw": xml_data.decode("utf-8", errors="replace")}]
+
+        invoices = []
+        for inv in root.iter(f"{{{NS_INV}}}invoice"):
+            info = {}
+            # Extract key fields
+            for tag in ("mark", "uid", "invoiceType", "series", "aa"):
+                el = inv.find(f".//{{{NS_INV}}}{tag}")
+                if el is not None and el.text:
+                    info[tag] = el.text
+            # Issuer/counterpart VAT
+            issuer_vat = inv.find(f".//{{{NS_INV}}}issuer/{{{NS_INV}}}vatNumber")
+            if issuer_vat is not None:
+                info["issuer_vat"] = issuer_vat.text
+            cp_vat = inv.find(f".//{{{NS_INV}}}counterpart/{{{NS_INV}}}vatNumber")
+            if cp_vat is not None:
+                info["counterpart_vat"] = cp_vat.text
+            # Totals
+            for tag in ("totalNetValue", "totalVatAmount", "totalGrossValue"):
+                el = inv.find(f".//{{{NS_INV}}}{tag}")
+                if el is not None and el.text:
+                    info[tag] = el.text
+            # Date
+            issue_date = inv.find(f".//{{{NS_INV}}}issueDate")
+            if issue_date is not None:
+                info["issueDate"] = issue_date.text
+            invoices.append(info)
+
+        if not invoices:
+            return [{"raw": xml_data.decode("utf-8", errors="replace")[:2000]}]
+        return invoices
+
+    def _parse_response(self, xml_data):
+        """Parse AADE response for send/cancel operations."""
+        try:
+            root = etree.fromstring(xml_data)
+        except Exception:
+            return {"raw": xml_data.decode("utf-8", errors="replace")}
+
+        results = []
+        for resp in root.iter(f"{{{NS_INV}}}response"):
+            r = {"success": False}
+            status = resp.find(f"{{{NS_INV}}}statusCode")
+            if status is not None:
+                r["success"] = status.text == "Success"
+            for tag in ("invoiceMark", "invoiceUid", "cancellationMark", "qrUrl"):
+                el = resp.find(f"{{{NS_INV}}}{tag}")
+                if el is not None and el.text:
+                    r[tag] = el.text
+            errors = []
+            for err in resp.iter(f"{{{NS_INV}}}error"):
+                msg = err.find(f"{{{NS_INV}}}message")
+                code = err.find(f"{{{NS_INV}}}code")
+                errors.append({
+                    "code": code.text if code is not None else "",
+                    "message": msg.text if msg is not None else "",
+                })
+            if errors:
+                r["errors"] = errors
+            results.append(r)
+
+        return results if results else {"raw": xml_data.decode("utf-8", errors="replace")}
+
+
+def _build_invoice_xml(client, counterpart_vat, invoice_type, series, number,
+                       items, payment_method=3, counterpart_country="GR",
+                       counterpart_name="", issue_date=None, currency="EUR"):
+    """Build myDATA XML for an invoice."""
+    root = etree.Element("InvoicesDoc", nsmap=NAMESPACES)
+    inv = etree.SubElement(root, "invoice")
+
+    # Issuer
+    issuer = etree.SubElement(inv, "issuer")
+    etree.SubElement(issuer, "vatNumber").text = client.issuer_vat
+    etree.SubElement(issuer, "country").text = client.issuer_country
+    etree.SubElement(issuer, "branch").text = str(client.issuer_branch)
+
+    # Counterpart
+    cp = etree.SubElement(inv, "counterpart")
+    etree.SubElement(cp, "vatNumber").text = counterpart_vat
+    etree.SubElement(cp, "country").text = counterpart_country
+    if counterpart_name and counterpart_country != "GR":
+        etree.SubElement(cp, "name").text = counterpart_name
+    etree.SubElement(cp, "branch").text = "0"
+
+    # Invoice header
+    header = etree.SubElement(inv, "invoiceHeader")
+    etree.SubElement(header, "series").text = series
+    etree.SubElement(header, "aa").text = str(number)
+    etree.SubElement(header, "issueDate").text = (issue_date or date.today()).isoformat()
+    etree.SubElement(header, "invoiceType").text = invoice_type
+    etree.SubElement(header, "currency").text = currency
+
+    # Payment methods
+    pm = etree.SubElement(inv, "paymentMethods")
+    pay = etree.SubElement(pm, "paymentMethodDetails")
+
+    total_net = Decimal("0")
+    total_vat = Decimal("0")
+
+    # Invoice details (lines)
+    for i, item in enumerate(items, 1):
+        net = Decimal(str(item["net_value"])).quantize(Decimal("0.01"))
+        vat_cat = int(item.get("vat_category", 1))
+        vat_rate = VAT_RATES.get(vat_cat, Decimal("0.24"))
+        vat_amount = (net * vat_rate).quantize(Decimal("0.01"))
+
+        detail = etree.SubElement(inv, "invoiceDetails")
+        etree.SubElement(detail, "lineNumber").text = str(i)
+        if item.get("quantity"):
+            etree.SubElement(detail, "quantity").text = str(item["quantity"])
+        if item.get("unit_price"):
+            etree.SubElement(detail, "unitPrice").text = str(item["unit_price"])
+        etree.SubElement(detail, "netValue").text = str(net)
+        etree.SubElement(detail, "vatCategory").text = str(vat_cat)
+        etree.SubElement(detail, "vatAmount").text = str(vat_amount)
+
+        # Income classification (must be in invoice namespace, not icls)
+        icls = etree.SubElement(detail, f"{{{NS_INV}}}incomeClassification")
+        etree.SubElement(icls, f"{{{NS_ICLS}}}classificationType").text = item.get(
+            "income_classification_type", "E3_561_003")
+        etree.SubElement(icls, f"{{{NS_ICLS}}}classificationCategory").text = item.get(
+            "income_classification_category", "category1_3")
+        etree.SubElement(icls, f"{{{NS_ICLS}}}amount").text = str(net)
+
+        total_net += net
+        total_vat += vat_amount
+
+    total_gross = total_net + total_vat
+
+    # Payment
+    etree.SubElement(pay, "type").text = str(payment_method)
+    etree.SubElement(pay, "amount").text = str(total_gross)
+
+    # Summary
+    summary = etree.SubElement(inv, "invoiceSummary")
+    etree.SubElement(summary, "totalNetValue").text = str(total_net)
+    etree.SubElement(summary, "totalVatAmount").text = str(total_vat)
+    etree.SubElement(summary, "totalWithheldAmount").text = "0.00"
+    etree.SubElement(summary, "totalFeesAmount").text = "0.00"
+    etree.SubElement(summary, "totalStampDutyAmount").text = "0.00"
+    etree.SubElement(summary, "totalOtherTaxesAmount").text = "0.00"
+    etree.SubElement(summary, "totalDeductionsAmount").text = "0.00"
+    etree.SubElement(summary, "totalGrossValue").text = str(total_gross)
+
+    # Income classification summary (must be in invoice namespace)
+    icls_sum = etree.SubElement(summary, f"{{{NS_INV}}}incomeClassification")
+    etree.SubElement(icls_sum, f"{{{NS_ICLS}}}classificationType").text = items[0].get(
+        "income_classification_type", "E3_561_003")
+    etree.SubElement(icls_sum, f"{{{NS_ICLS}}}classificationCategory").text = items[0].get(
+        "income_classification_category", "category1_3")
+    etree.SubElement(icls_sum, f"{{{NS_ICLS}}}amount").text = str(total_net)
+
+    return etree.tostring(root, xml_declaration=True, encoding="UTF-8", pretty_print=True)
+
+
+# ── Helper ──
+
+def _get_client(args: dict) -> MyDataClient:
+    """Get client for specific AFM or default."""
+    afm = args.pop("issuer_afm", None)
+    return MyDataClient.from_db_or_env(afm)
+
+
+# ── Tool Implementations ──
+
+async def _send_invoice(args: dict) -> str:
+    client = _get_client(args)
+    try:
+        issue_dt = date.fromisoformat(args["issue_date"]) if args.get("issue_date") else None
+        xml = _build_invoice_xml(
+            client,
+            counterpart_vat=args["counterpart_vat"],
+            invoice_type=args["invoice_type"],
+            series=args["series"],
+            number=args["number"],
+            items=args["items"],
+            payment_method=args.get("payment_method", 3),
+            counterpart_country=args.get("counterpart_country", "GR"),
+            counterpart_name=args.get("counterpart_name", ""),
+            issue_date=issue_dt,
+            currency=args.get("currency", "EUR"),
+        )
+        resp = await client.send_invoice_xml(xml)
+        results = client._parse_response(resp)
+        return json.dumps({"results": results}, ensure_ascii=False, indent=2)
+    finally:
+        await client.close()
+
+
+async def _get_invoices(args: dict) -> str:
+    client = _get_client(args)
+    try:
+        direction = args.get("direction", "received")
+        mark = args.get("mark", 0)
+        date_from = args.get("date_from")
+        date_to = args.get("date_to")
+
+        if direction == "received":
+            invoices = await client.get_received_invoices(mark, date_from, date_to)
+        else:
+            invoices = await client.get_sent_invoices(mark, date_from, date_to)
+
+        return json.dumps({"invoices": invoices, "count": len(invoices)}, ensure_ascii=False, indent=2)
+    finally:
+        await client.close()
+
+
+async def _cancel_invoice(args: dict) -> str:
+    client = _get_client(args)
+    try:
+        results = await client.cancel_invoice(args["mark"])
+        return json.dumps({"results": results}, ensure_ascii=False, indent=2)
+    finally:
+        await client.close()
+
+
+async def _income_summary(args: dict) -> str:
+    client = _get_client(args)
+    try:
+        data = await client.get_income(args["date_from"], args["date_to"])
+        return data.decode("utf-8", errors="replace")
+    finally:
+        await client.close()
+
+
+async def _expenses_summary(args: dict) -> str:
+    client = _get_client(args)
+    try:
+        data = await client.get_expenses(args["date_from"], args["date_to"])
+        return data.decode("utf-8", errors="replace")
+    finally:
+        await client.close()
+
+
+async def _generate_xml(args: dict) -> str:
+    client = _get_client(args)
+    try:
+        issue_dt = date.fromisoformat(args["issue_date"]) if args.get("issue_date") else None
+        xml = _build_invoice_xml(
+            client,
+            counterpart_vat=args["counterpart_vat"],
+            invoice_type=args["invoice_type"],
+            series=args["series"],
+            number=args["number"],
+            items=args["items"],
+            payment_method=args.get("payment_method", 3),
+            counterpart_country=args.get("counterpart_country", "GR"),
+            counterpart_name=args.get("counterpart_name", ""),
+            issue_date=issue_dt,
+            currency=args.get("currency", "EUR"),
+        )
+        return json.dumps({"xml": xml.decode("utf-8")}, ensure_ascii=False)
+    finally:
+        await client.close()
+
+
+def _add_credentials(args: dict) -> str:
+    cred_store.add(
+        afm=args["afm"],
+        user_id=args["user_id"],
+        subscription_key=args["subscription_key"],
+        env=args.get("env", "dev"),
+        country=args.get("country", "GR"),
+        branch=args.get("branch", 0),
+        label=args.get("label", ""),
+    )
+    return json.dumps({"status": "ok", "afm": args["afm"]}, ensure_ascii=False)
+
+
+def _list_credentials(args: dict) -> str:
+    creds = cred_store.list_all()
+    default = cred_store.get_default()
+    return json.dumps({
+        "credentials": creds,
+        "default_afm": default,
+        "count": len(creds),
+    }, ensure_ascii=False, indent=2)
+
+
+def _remove_credentials(args: dict) -> str:
+    removed = cred_store.remove(args["afm"])
+    if not removed:
+        return json.dumps({"error": f"AFM {args['afm']} not found"}, ensure_ascii=False)
+    return json.dumps({"status": "ok", "afm": args["afm"]}, ensure_ascii=False)
+
+
+def _set_default_afm(args: dict) -> str:
+    cred_store.set_default(args["afm"])
+    return json.dumps({"status": "ok", "default_afm": args["afm"]}, ensure_ascii=False)
+
+
+# ── MCP Server Setup ──
+
+server = Server("aade")
+
+TOOLS = [
+    Tool(
+        name="send_invoice",
+        description="Send invoice to AADE myDATA. Returns MARK (unique registration number). Supports all invoice types: 1.1 (sales), 2.1 (services), 5.1/5.2 (credit notes), 11.1/11.2 (retail receipts).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "issuer_afm": {
+                    "type": "string",
+                    "description": "Issuer AFM. If provided, loads credentials from SQLite. If omitted, uses default AFM or .env.",
+                },
+                "counterpart_vat": {
+                    "type": "string",
+                    "description": "Counterpart VAT number (9 digits for GR)",
+                },
+                "invoice_type": {
+                    "type": "string",
+                    "enum": ["1.1", "1.2", "1.3", "2.1", "2.2", "2.3", "2.4", "3.1", "5.1", "5.2", "11.1", "11.2"],
+                    "description": "Invoice type: 1.1=Sales, 2.1=Services, 5.1=Credit note (correlated), 5.2=Credit note (uncorrelated), 11.1=Retail receipt, 11.2=Services receipt",
+                },
+                "series": {
+                    "type": "string",
+                    "description": "Invoice series (e.g. 'A', 'B', 'TPY')",
+                },
+                "number": {
+                    "type": "integer",
+                    "description": "Invoice sequence number",
+                },
+                "items": {
+                    "type": "array",
+                    "description": "Invoice line items",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "net_value": {"type": "number", "description": "Net value (before VAT)"},
+                            "vat_category": {"type": "integer", "description": "VAT category: 1=24%, 2=13%, 3=6%, 4=17%(island), 5=9%(island), 6=4%(island), 7=exempt, 8=no VAT", "default": 1},
+                            "description": {"type": "string", "description": "Line item description"},
+                            "quantity": {"type": "number"},
+                            "unit_price": {"type": "number"},
+                            "income_classification_type": {"type": "string", "default": "E3_561_003"},
+                            "income_classification_category": {"type": "string", "default": "category1_3"},
+                        },
+                        "required": ["net_value"],
+                    },
+                },
+                "payment_method": {
+                    "type": "integer",
+                    "description": "Payment method: 1=Domestic, 2=Foreign, 3=Cash, 4=Check, 5=Credit, 6=Web Banking, 7=POS/Card",
+                    "default": 3,
+                },
+                "counterpart_country": {"type": "string", "default": "GR"},
+                "counterpart_name": {"type": "string", "default": ""},
+                "issue_date": {"type": "string", "description": "Issue date YYYY-MM-DD (default: today)"},
+                "currency": {"type": "string", "default": "EUR"},
+            },
+            "required": ["counterpart_vat", "invoice_type", "series", "number", "items"],
+        },
+    ),
+    Tool(
+        name="get_invoices",
+        description="Retrieve sent or received invoices from AADE myDATA with optional date filters.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "issuer_afm": {"type": "string", "description": "Issuer AFM (optional, uses default if omitted)"},
+                "direction": {
+                    "type": "string",
+                    "enum": ["received", "sent"],
+                    "description": "Invoice direction: 'received' or 'sent'",
+                    "default": "received",
+                },
+                "mark": {"type": "integer", "description": "Start from this MARK (0 = all)", "default": 0},
+                "date_from": {"type": "string", "description": "Start date YYYY-MM-DD"},
+                "date_to": {"type": "string", "description": "End date YYYY-MM-DD"},
+            },
+        },
+    ),
+    Tool(
+        name="cancel_invoice",
+        description="Cancel an invoice by its MARK number.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "issuer_afm": {"type": "string", "description": "Issuer AFM (optional)"},
+                "mark": {"type": "integer", "description": "MARK of the invoice to cancel"},
+            },
+            "required": ["mark"],
+        },
+    ),
+    Tool(
+        name="income_summary",
+        description="Get income summary from AADE for a date range. Returns XML with income data.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "issuer_afm": {"type": "string", "description": "Issuer AFM (optional)"},
+                "date_from": {"type": "string", "description": "Start date YYYY-MM-DD"},
+                "date_to": {"type": "string", "description": "End date YYYY-MM-DD"},
+            },
+            "required": ["date_from", "date_to"],
+        },
+    ),
+    Tool(
+        name="expenses_summary",
+        description="Get expenses summary from AADE for a date range. Returns XML with expense data.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "issuer_afm": {"type": "string", "description": "Issuer AFM (optional)"},
+                "date_from": {"type": "string", "description": "Start date YYYY-MM-DD"},
+                "date_to": {"type": "string", "description": "End date YYYY-MM-DD"},
+            },
+            "required": ["date_from", "date_to"],
+        },
+    ),
+    Tool(
+        name="generate_xml",
+        description="Generate myDATA XML without sending to AADE (dry run). Useful for previewing the XML before submission.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "issuer_afm": {"type": "string", "description": "Issuer AFM (optional)"},
+                "counterpart_vat": {"type": "string", "description": "Counterpart VAT number"},
+                "invoice_type": {"type": "string", "description": "Invoice type (e.g. 2.1)"},
+                "series": {"type": "string"},
+                "number": {"type": "integer"},
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "net_value": {"type": "number"},
+                            "vat_category": {"type": "integer", "default": 1},
+                            "description": {"type": "string"},
+                        },
+                        "required": ["net_value"],
+                    },
+                },
+                "payment_method": {"type": "integer", "default": 3},
+                "counterpart_country": {"type": "string", "default": "GR"},
+                "counterpart_name": {"type": "string", "default": ""},
+                "issue_date": {"type": "string"},
+                "currency": {"type": "string", "default": "EUR"},
+            },
+            "required": ["counterpart_vat", "invoice_type", "series", "number", "items"],
+        },
+    ),
+    Tool(
+        name="add_credentials",
+        description="Store myDATA API credentials for an AFM in SQLite. Use this to set up multi-AFM support for accountants or multi-entity businesses.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "afm": {"type": "string", "description": "Greek VAT number (AFM)"},
+                "user_id": {"type": "string", "description": "AADE myDATA User ID"},
+                "subscription_key": {"type": "string", "description": "AADE myDATA Subscription Key"},
+                "env": {"type": "string", "enum": ["dev", "prod"], "default": "dev", "description": "Environment: dev (testing) or prod (live)"},
+                "country": {"type": "string", "default": "GR"},
+                "branch": {"type": "integer", "default": 0},
+                "label": {"type": "string", "description": "Human-readable label for this entity (e.g. company name)"},
+            },
+            "required": ["afm", "user_id", "subscription_key"],
+        },
+    ),
+    Tool(
+        name="list_credentials",
+        description="List all stored myDATA AFMs with their labels. No secrets are shown.",
+        inputSchema={
+            "type": "object",
+            "properties": {},
+        },
+    ),
+    Tool(
+        name="remove_credentials",
+        description="Remove stored myDATA credentials for an AFM.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "afm": {"type": "string", "description": "AFM to remove"},
+            },
+            "required": ["afm"],
+        },
+    ),
+    Tool(
+        name="set_default_afm",
+        description="Set the default AFM used when issuer_afm is not specified in invoice operations.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "afm": {"type": "string", "description": "AFM to set as default"},
+            },
+            "required": ["afm"],
+        },
+    ),
+]
+
+
+@server.list_tools()
+async def list_tools() -> list[Tool]:
+    return TOOLS
+
+
+@server.call_tool()
+async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    try:
+        result = await _handle_tool(name, dict(arguments))
+        return [TextContent(type="text", text=result)]
+    except ValueError as e:
+        return [TextContent(type="text", text=json.dumps({"error": str(e)}, ensure_ascii=False))]
+    except Exception as e:
+        return [TextContent(type="text", text=json.dumps({"error": f"{type(e).__name__}: {e}"}, ensure_ascii=False))]
+
+
+async def _handle_tool(name: str, args: dict) -> str:
+    """Dispatch tool calls."""
+    if name == "send_invoice":
+        return await _send_invoice(args)
+    elif name == "get_invoices":
+        return await _get_invoices(args)
+    elif name == "cancel_invoice":
+        return await _cancel_invoice(args)
+    elif name == "income_summary":
+        return await _income_summary(args)
+    elif name == "expenses_summary":
+        return await _expenses_summary(args)
+    elif name == "generate_xml":
+        return await _generate_xml(args)
+    elif name == "add_credentials":
+        return _add_credentials(args)
+    elif name == "list_credentials":
+        return _list_credentials(args)
+    elif name == "remove_credentials":
+        return _remove_credentials(args)
+    elif name == "set_default_afm":
+        return _set_default_afm(args)
+    else:
+        return json.dumps({"error": f"Unknown tool: {name}"})
+
+
+async def main():
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(read_stream, write_stream, server.create_initialization_options())
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
