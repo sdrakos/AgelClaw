@@ -263,7 +263,7 @@ proactive/src/agelclaw/           # Python package (pip install)
 
 **Hard rules (promoted learnings).** Learnings promoted to rules (`is_rule=1`) are injected into every system prompt via `memory.build_rules_prompt()`.
 
-**Subagent system.** Defined in `subagents/<name>/SUBAGENT.md` (YAML frontmatter: provider, task_type, tools) with optional `scripts/` and `references/` dirs. Daemon routes assigned tasks to `execute_subagent_task()` which uses `AgentDefinition` (Claude) or custom system prompt (OpenAI).
+**Subagent system.** Defined in `subagents/<name>/SUBAGENT.md` (YAML frontmatter: provider, task_type, tools) with optional `scripts/` and `references/` dirs. Daemon routes assigned tasks to `execute_subagent_task()` which uses `AgentDefinition` (Claude) or custom system prompt (OpenAI). The `task_type` field in SUBAGENT.md frontmatter determines HOW the subagent runs: `script` = direct subprocess execution (runs `command` field, no AI, ~3s), `general` = full AI agent with tools/MCP (~60-120s), `code` = AI agent routed to Claude Opus (for coding), `research` = AI agent routed to OpenAI GPT-4.1 (for search). Rule: if a subagent always runs the same script → `task_type: script`; if it needs judgment/creativity → `general`/`code`/`research`. The coder subagent's instructions include a detailed task_type reference table with examples.
 
 **Subagent delegation.** System prompt enforces that the chat agent MUST delegate to an existing subagent instead of executing long-running work inline. Agent creates a task via `add_subagent_task` and responds immediately, freeing the chat. Daemon executes the subagent in the background.
 

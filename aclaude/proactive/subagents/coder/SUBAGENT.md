@@ -101,7 +101,25 @@ python subagents/agent-name/scripts/main.py --help
 - ΠΑΝΤΑ `add_subagent_task`, ΠΟΤΕ `add_task` για subagent work
 - Body πρέπει να είναι self-contained (exact paths, APIs, org IDs)
 - Scripts πρέπει να τρέχουν standalone
-- task_type: `script` (αν τρέχει fixed command) ή `code`/`research`/`general` (αν χρειάζεται AI)
+
+**task_type — ΚΡΙΣΙΜΟ (καθορίζει πώς τρέχει ο subagent):**
+
+| task_type | Πώς τρέχει | Πότε το χρησιμοποιείς |
+|-----------|-----------|----------------------|
+| `script` | **Subprocess** — τρέχει ΜΟΝΟ το `command` από το frontmatter. Κανένα AI agent, κανένα tool, κανένα MCP. Γρήγορο (~3s). | Όταν το task είναι **fixed command** χωρίς σκέψη: fetch data → process → email. Π.χ. AADE report, cinema digest, Diavgeia monitor. |
+| `general` | **AI agent** — Claude/OpenAI agent με tools (Bash, Read, Write, MCP κλπ). Σκέφτεται, αποφασίζει, χρησιμοποιεί tools. Αργό (~60-120s). | Όταν χρειάζεται **κρίση/δημιουργικότητα**: γράψε κώδικα, αναζήτησε πληροφορίες, αποφάσισε τι να κάνεις. |
+| `code` | Ίδιο με `general`, αλλά ο router προτιμά Claude Opus (καλύτερο για κώδικα). | Για coding tasks. |
+| `research` | Ίδιο με `general`, αλλά ο router προτιμά OpenAI GPT-4.1 (καλύτερο για search). | Για research tasks. |
+
+**ΚΑΝΟΝΑΣ:** Αν ο subagent τρέχει ΠΑΝΤΑ το ίδιο script (π.χ. `python scripts/main.py --flag`) → `task_type: script` + `command: "python scripts/main.py"`.
+Αν χρειάζεται να σκεφτεί/αποφασίσει → `task_type: general` (ή `code`/`research`).
+
+**Παραδείγματα:**
+- `cinema-news-digest` → `script` (πάντα: fetch RSS → filter → email)
+- `diavgeia-tender-monitor` → `script` (πάντα: search API → filter → email)
+- `aade-accounting` → `script` (πάντα: fetch invoices → Excel → email)
+- `aade` → `general` (χρειάζεται AI: τιμολόγηση, ερωτήσεις, multi-step)
+- `coder` → `code` (γράφει κώδικα, δημιουργεί skills/subagents)
 
 ### 5. Δημιουργία MCP Servers
 Όταν ζητηθεί δημιουργία MCP server, **ΠΡΩΤΑ** διάβασε τον mcp-server-creator guide:
