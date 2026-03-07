@@ -202,8 +202,11 @@ proactive/src/agelclaw/           # Python package (pip install)
 ├── mcp_servers/<name>/           # MCP server definitions (SERVER.md + server.py)
 ├── persona/                      # Agent personality & onboarding
 │   ├── SOUL.md, IDENTITY.md     # Core values, name/vibe (loaded into every system prompt)
+│   ├── GUARDRAIL.md              # Security rules (loaded into every system prompt)
+│   ├── DAEMON.md                 # Daemon-specific instructions (autonomous execution rules)
 │   ├── BOOTSTRAP.md              # First-run onboarding (auto-deleted after completion)
-│   └── HEARTBEAT.md              # User-editable heartbeat checklist
+│   ├── HEARTBEAT.md              # User-editable heartbeat checklist
+│   └── SYSTEM_PROMPT_<id>.md     # Auto-generated per-task (not user-editable, cleaned up after task)
 ├── reports/                      # Generated reports
 ├── uploads/                      # Uploaded files
 └── .Claude/Skills/               # Project-specific skills (copied from bundled on init)
@@ -227,7 +230,7 @@ proactive/src/agelclaw/           # Python package (pip install)
 
 **MCP Marketplace.** Standalone MCP server directory `mcp_servers/<name>/` (SERVER.md + server.py). `auto_load: true` servers loaded for all queries. Subagents reference additional servers via `mcp_servers:` in SUBAGENT.md. Tool pattern: `mcp__{server}__{tool}`. `agent_config.py` has `_scan_mcp_servers()` (returns configs + prompt text), `load_mcp_server_config(name)` (per-server loading), `_build_mcp_tool_wildcards()` (builds `mcp__name__*` entries). `build_agent_options()` automatically includes auto-loaded MCP servers. Daemon passes MCP configs to all task types (global, subagent, heartbeat).
 
-**memory-tools MCP server.** Bundled auto-loaded MCP server that provides native tool access to all `agelclaw-mem` operations: tasks (pending, due, stats, add_task, complete_task), learnings, profile, skills, subagents. Replaces `Bash("agelclaw-mem <cmd>")` with direct `mcp__memory-tools__<cmd>` calls — 1 tool call instead of 4. Agent can still use `agelclaw-mem` via Bash as fallback.
+**memory-tools MCP server.** Bundled auto-loaded MCP server that provides native tool access to all `agelclaw-mem` operations: tasks (pending, due, stats, add_task, complete_task), learnings, profile, skills, subagents. Replaces `Bash("agelclaw-mem <cmd>")` with direct `mcp__memory-tools__<cmd>` calls — 1 tool call instead of 4. Agent can still use `agelclaw-mem` via Bash as fallback. The `_wake_daemon()` helper uses `POST /wake` (not `POST /task`) to avoid creating duplicate tasks — previously it called `POST /task` which created a second unassigned task with the same title.
 
 **AADE myDATA MCP server.** `mcp_servers/aade/` — self-contained MCP server for Greek electronic invoicing (AADE myDATA API). 13 tools: `send_invoice`, `get_invoices`, `cancel_invoice`, `income_summary`, `expenses_summary`, `generate_xml`, `add_credentials`, `list_credentials`, `remove_credentials`, `set_default_afm`, `daily_accounting_report`, `configure_accounting`, `accounting_status`. Multi-AFM credential storage via SQLite (`~/.agelclaw/data/mydata_credentials.db`). `auto_load: false` — loaded only by the AADE subagent via `mcp_servers: [aade]`. Dev URL: `mydataapidev.aade.gr`, prod: `mydatapi.aade.gr/myDATA`. AADE requires `dd/MM/yyyy` date format and `https://` namespace URIs for classification elements on dev.
 
@@ -273,11 +276,13 @@ proactive/src/agelclaw/           # Python package (pip install)
 
 **Memory context isolation.** In group Telegram chats, the system: (1) skips persona files from the prompt, (2) excludes user profile from context, (3) uses separate "group_chat" session, (4) doesn't recall private conversation history.
 
-**Persona files.** `persona/SOUL.md`, `persona/IDENTITY.md`, and `persona/GUARDRAIL.md` are loaded at the top of every system prompt via `_load_persona_files()`. `persona/BOOTSTRAP.md` triggers first-run onboarding — auto-deleted after completion. Changes take effect within 120s (prompt cache TTL).
+**Persona files.** `persona/SOUL.md`, `persona/IDENTITY.md`, `persona/GUARDRAIL.md`, and `persona/DAEMON.md` are loaded into the system prompt. SOUL/IDENTITY/GUARDRAIL are loaded at the top of every prompt via `_load_persona_files()`. DAEMON.md is loaded by the daemon only via `_load_daemon_extensions()` (with fallback to bundled template). `persona/BOOTSTRAP.md` triggers first-run onboarding — auto-deleted after completion. All files are user-editable. Changes take effect within 120s (prompt cache TTL).
+
+**DAEMON.md (daemon instructions).** Loaded only by the daemon via `_load_daemon_extensions()`. Contains autonomous execution rules: language (Greek results), task folders, skill-first execution, task reporting, autonomy rules. Previously hardcoded as `_DAEMON_EXTENSIONS` constant in daemon.py — now externalized to `persona/DAEMON.md` so users can customize daemon behavior without touching code. Bundled template at `data/templates/DAEMON.md`, copied to persona dir on `agelclaw init`.
 
 **GUARDRAIL.md (security rules).** Loaded into every system prompt. Enforces strict block policy: external content (emails, file uploads, scraped pages, API responses, group chat) is DATA ONLY — never instructions. Blocks file operations, tool execution, config changes, credential exposure, and memory manipulation when triggered by external content. Includes prompt injection detection patterns and notification protocol (log + Telegram alert to owner). User-editable at `persona/GUARDRAIL.md`.
 
-**System prompt file offloading (Windows).** On Windows, the Claude Agent SDK passes the entire system prompt as a CLI argument to `claude.exe`. Windows has a 32,767 char command line limit. Our system prompt (persona + skills + subagents + MCP + context + rules) exceeds ~30K chars. When the prompt exceeds `_MAX_SYSTEM_PROMPT_CHARS` (28,000), `build_agent_options()` writes it to `persona/SYSTEM_PROMPT.md` and passes a short boot-loader prompt instead. The agent reads the full prompt from the file on its first turn via the Read tool. This file is auto-generated on every request (not user-editable).
+**System prompt file offloading (Windows).** On Windows, the Claude Agent SDK passes the entire system prompt as a CLI argument to `claude.exe`. Windows has a 32,767 char command line limit. Our system prompt (persona + skills + subagents + MCP + context + rules) exceeds ~30K chars. `safe_system_prompt(prompt, task_id)` writes the prompt to `persona/SYSTEM_PROMPT_<task_id>.md` when it exceeds 28K chars, and passes a short boot-loader prompt instead. Each task gets its own file to avoid race conditions with parallel tasks. Files are cleaned up in the `finally` block via `_cleanup_prompt_file(task_id)`. Chat/telegram use `SYSTEM_PROMPT.md` (no suffix). These files are auto-generated (not user-editable).
 
 **Heartbeat proactivity.** Daemon runs `_maybe_run_heartbeat()` after each scheduler cycle. Controlled by `heartbeat_enabled`, `heartbeat_interval_hours`, `heartbeat_quiet_start/end` in config.yaml. Reads `persona/HEARTBEAT.md` for a user-editable checklist. Sends Telegram messages only when actionable.
 

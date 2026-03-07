@@ -903,14 +903,17 @@ def get_system_prompt_for_channel(channel_type: str = "private") -> str:
 _MAX_SYSTEM_PROMPT_CHARS = 28_000
 
 
-def safe_system_prompt(prompt: str) -> str:
+def safe_system_prompt(prompt: str, task_id: str | int | None = None) -> str:
     """On Windows, offload large system prompts to a file to avoid CLI length limits.
     Used by all Claude SDK call sites: telegram, web, CLI, daemon, subagents, heartbeat.
     On non-Windows or short prompts, returns the prompt unchanged.
+
+    Each task_id gets its own file to avoid race conditions with parallel tasks.
     """
     import sys as _sys
     if _sys.platform == "win32" and len(prompt) > _MAX_SYSTEM_PROMPT_CHARS:
-        prompt_file = get_persona_dir() / "SYSTEM_PROMPT.md"
+        suffix = f"_{task_id}" if task_id else ""
+        prompt_file = get_persona_dir() / f"SYSTEM_PROMPT{suffix}.md"
         prompt_file.write_text(prompt, encoding="utf-8")
         return (
             f"Your full system prompt is in: {prompt_file}\n"

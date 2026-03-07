@@ -183,6 +183,8 @@ proactive/src/agelclaw/           # Python package (pip install)
         ├── ecosystem.config.js
         ├── SOUL.md               # Persona: core values & behavior rules
         ├── IDENTITY.md           # Persona: agent name, vibe, user info
+        ├── GUARDRAIL.md          # Persona: security rules
+        ├── DAEMON.md             # Persona: daemon-specific instructions
         ├── BOOTSTRAP.md          # Persona: first-run onboarding (self-deleting)
         └── HEARTBEAT.md          # Persona: heartbeat checklist
 ```
@@ -202,8 +204,11 @@ proactive/src/agelclaw/           # Python package (pip install)
 ├── persona/                      # Agent personality & onboarding
 │   ├── SOUL.md                   # Core values, behavior rules, communication style
 │   ├── IDENTITY.md               # Agent name, vibe, user info
+│   ├── GUARDRAIL.md              # Security rules (loaded into every system prompt)
+│   ├── DAEMON.md                 # Daemon-specific instructions (autonomous execution rules)
 │   ├── BOOTSTRAP.md              # First-run onboarding (auto-deleted after completion)
-│   └── HEARTBEAT.md              # User-editable heartbeat checklist
+│   ├── HEARTBEAT.md              # User-editable heartbeat checklist
+│   └── SYSTEM_PROMPT_<id>.md     # Auto-generated per-task (not user-editable, cleaned up after task)
 ├── reports/                      # Generated reports
 ├── uploads/                      # Uploaded files
 └── .Claude/Skills/               # Project-specific skills (copied from bundled on init)
@@ -227,7 +232,7 @@ proactive/src/agelclaw/           # Python package (pip install)
 
 **MCP Marketplace.** Standalone MCP server directory `mcp_servers/<name>/` (SERVER.md + server.py). `auto_load: true` servers loaded for all queries. Subagents reference additional servers via `mcp_servers:` in SUBAGENT.md. Tool pattern: `mcp__{server}__{tool}`. `agent_config.py` has `_scan_mcp_servers()` (returns configs + prompt text), `load_mcp_server_config(name)` (per-server loading), `_build_mcp_tool_wildcards()` (builds `mcp__name__*` entries). `build_agent_options()` automatically includes auto-loaded MCP servers. Daemon passes MCP configs to all task types (global, subagent, heartbeat).
 
-**memory-tools MCP server.** Bundled auto-loaded MCP server that provides native tool access to all `agelclaw-mem` operations: tasks (pending, due, stats, add_task, complete_task), learnings, profile, skills, subagents. Replaces `Bash("agelclaw-mem <cmd>")` with direct `mcp__memory-tools__<cmd>` calls — 1 tool call instead of 4. Agent can still use `agelclaw-mem` via Bash as fallback.
+**memory-tools MCP server.** Bundled auto-loaded MCP server that provides native tool access to all `agelclaw-mem` operations: tasks (pending, due, stats, add_task, complete_task), learnings, profile, skills, subagents. Replaces `Bash("agelclaw-mem <cmd>")` with direct `mcp__memory-tools__<cmd>` calls — 1 tool call instead of 4. Agent can still use `agelclaw-mem` via Bash as fallback. The `_wake_daemon()` helper uses `POST /wake` (not `POST /task`) to avoid creating duplicate tasks — previously it called `POST /task` which created a second unassigned task with the same title.
 
 **Skill-first execution.** Before any task, agents call `agelclaw-mem find_skill "<description>"`. If no match: research, create skill (SKILL.md + scripts/ + references/), then execute. Skills in `.Claude/Skills/` (project) or `~/.claude/skills/` (user).
 
@@ -255,9 +260,11 @@ proactive/src/agelclaw/           # Python package (pip install)
 
 **Port-aware service startup.** `agent_run.py` (dev runner) checks if a service's port is already in use before starting it. If the daemon is already running on `:8420` or the API server on `:8000`, it skips that service instead of crashing with `Address already in use`.
 
-**Persona files.** `persona/SOUL.md` (values & behavior), `persona/IDENTITY.md` (name, vibe, user info), and `persona/GUARDRAIL.md` (security rules) are loaded at the top of every system prompt via `_load_persona_files()`. `persona/BOOTSTRAP.md` triggers first-run onboarding — auto-deleted after completion. All files are user-editable. Changes take effect within 120s (prompt cache TTL).
+**Persona files.** `persona/SOUL.md`, `persona/IDENTITY.md`, `persona/GUARDRAIL.md`, and `persona/DAEMON.md` are loaded into the system prompt. SOUL/IDENTITY/GUARDRAIL are loaded at the top of every prompt via `_load_persona_files()`. DAEMON.md is loaded by the daemon only via `_load_daemon_extensions()` (with fallback to bundled template). `persona/BOOTSTRAP.md` triggers first-run onboarding — auto-deleted after completion. All files are user-editable. Changes take effect within 120s (prompt cache TTL).
 
-**System prompt file offloading (Windows).** The Claude Agent SDK passes the system prompt as a CLI argument. Windows has a 32,767 char command line limit. When the prompt exceeds 28,000 chars, `build_agent_options()` writes it to `persona/SYSTEM_PROMPT.md` and passes a short boot-loader prompt instead. The agent reads the full prompt via Read on its first turn. This file is auto-generated (not user-editable).
+**DAEMON.md (daemon instructions).** Loaded only by the daemon via `_load_daemon_extensions()`. Contains autonomous execution rules: language (Greek results), task folders, skill-first execution, task reporting, autonomy rules. Previously hardcoded as `_DAEMON_EXTENSIONS` constant in daemon.py — now externalized to `persona/DAEMON.md` so users can customize daemon behavior without touching code. Bundled template at `data/templates/DAEMON.md`, copied to persona dir on `agelclaw init`.
+
+**System prompt file offloading (Windows).** The Claude Agent SDK passes the system prompt as a CLI argument. Windows has a 32,767 char command line limit. `safe_system_prompt(prompt, task_id)` writes the prompt to `persona/SYSTEM_PROMPT_<task_id>.md` when it exceeds 28K chars, and passes a short boot-loader prompt instead. Each task gets its own file to avoid race conditions with parallel tasks. Files are cleaned up in the `finally` block via `_cleanup_prompt_file(task_id)`. These files are auto-generated (not user-editable).
 
 **Heartbeat proactivity.** Daemon runs `_maybe_run_heartbeat()` after each scheduler cycle. Controlled by `heartbeat_enabled`, `heartbeat_interval_hours`, `heartbeat_quiet_start/end` in config.yaml. Reads `persona/HEARTBEAT.md` for a user-editable checklist. State tracked via `kv_store` key `last_heartbeat_at`. Sends Telegram messages only when there's something actionable.
 
