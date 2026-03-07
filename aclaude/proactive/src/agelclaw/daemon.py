@@ -1112,16 +1112,13 @@ async def execute_subagent_task(task: dict, cycle_session: str):
             log.error(f"[Subagent '{subagent_name}' Task #{task_id}] TIMEOUT after {duration:.1f}s: {e}\n  {diagnostic}")
 
             # Auto-retry if max_retries allows
-            meta = json.loads(task.get("metadata", "{}") or "{}")
-            retry_count = meta.get("retry_count", 0)
+            retry_count = task.get("retry_count", 0) or 0
             if retry_count < sa_max_retries:
-                meta["retry_count"] = retry_count + 1
-                memory.update_task(task_id, status="pending", error=f"Retry {retry_count + 1}/{sa_max_retries}: {e}")
-                with memory._conn() as conn:
-                    conn.execute("UPDATE tasks SET metadata=? WHERE id=?", (json.dumps(meta), task_id))
-                log.info(f"[Subagent '{subagent_name}' Task #{task_id}] Auto-retry {retry_count + 1}/{sa_max_retries}")
+                retry_count += 1
+                memory.update_task(task_id, status="pending", error=f"Retry {retry_count}/{sa_max_retries}: {e}", retry_count=retry_count)
+                log.info(f"[Subagent '{subagent_name}' Task #{task_id}] Auto-retry {retry_count}/{sa_max_retries}")
                 send_telegram_notification(task_id, task_title, "started",
-                    f"Timeout μετά από {duration:.0f}s — αυτόματο retry ({retry_count + 1}/{sa_max_retries})", duration)
+                    f"Timeout μετά από {duration:.0f}s — αυτόματο retry ({retry_count}/{sa_max_retries})", duration)
                 wake_event.set()  # Wake daemon to pick up retried task
             else:
                 memory.update_task(task_id, status="failed", error=f"{e} | {diagnostic}")
@@ -1146,16 +1143,13 @@ async def execute_subagent_task(task: dict, cycle_session: str):
             log.error(f"[Subagent '{subagent_name}' Task #{task_id}] Error: {e}", exc_info=True)
 
             # Auto-retry for transient failures if max_retries allows
-            meta = json.loads(task.get("metadata", "{}") or "{}")
-            retry_count = meta.get("retry_count", 0)
+            retry_count = task.get("retry_count", 0) or 0
             if retry_count < sa_max_retries:
-                meta["retry_count"] = retry_count + 1
-                memory.update_task(task_id, status="pending", error=f"Retry {retry_count + 1}/{sa_max_retries}: {e}")
-                with memory._conn() as conn:
-                    conn.execute("UPDATE tasks SET metadata=? WHERE id=?", (json.dumps(meta), task_id))
-                log.info(f"[Subagent '{subagent_name}' Task #{task_id}] Auto-retry {retry_count + 1}/{sa_max_retries} after error: {e}")
+                retry_count += 1
+                memory.update_task(task_id, status="pending", error=f"Retry {retry_count}/{sa_max_retries}: {e}", retry_count=retry_count)
+                log.info(f"[Subagent '{subagent_name}' Task #{task_id}] Auto-retry {retry_count}/{sa_max_retries} after error: {e}")
                 send_telegram_notification(task_id, task_title, "started",
-                    f"Error: {str(e)[:100]} — αυτόματο retry ({retry_count + 1}/{sa_max_retries})", duration)
+                    f"Error: {str(e)[:100]} — αυτόματο retry ({retry_count}/{sa_max_retries})", duration)
                 wake_event.set()
             else:
                 memory.log_conversation(role="system", content=f"Subagent '{subagent_name}' Task #{task_id} ERROR: {e}", session_id=session_id)
