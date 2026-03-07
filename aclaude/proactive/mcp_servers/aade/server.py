@@ -827,18 +827,26 @@ async def _daily_accounting_report(args: dict) -> str:
                     f"<p>Δείτε τα αναλυτικά στοιχεία στο συνημμένο Excel.</p>"
                 )
                 try:
-                    proc = subprocess.run(
-                        [sys.executable, str(script),
-                         "--to", recipients,
-                         "--subject", subject,
-                         "--body", body,
-                         "--attachment", str(xlsx_path)],
-                        capture_output=True, text=True, timeout=60,
+                    import asyncio as _aio
+                    proc = await _aio.create_subprocess_exec(
+                        sys.executable, str(script),
+                        "--to", recipients,
+                        "--subject", subject,
+                        "--body", body,
+                        "--attachment", str(xlsx_path),
+                        stdout=_aio.subprocess.PIPE,
+                        stderr=_aio.subprocess.PIPE,
                     )
+                    try:
+                        stdout, stderr = await _aio.wait_for(proc.communicate(), timeout=60)
+                    except _aio.TimeoutError:
+                        proc.kill()
+                        result["email_result"] = "Email timeout (60s)"
+                        return json.dumps(result, ensure_ascii=False, indent=2)
                     if proc.returncode == 0:
                         result["email_result"] = f"Email στάλθηκε στο {recipients}"
                     else:
-                        result["email_result"] = f"Email error: {proc.stderr[:500]}"
+                        result["email_result"] = f"Email error: {stderr.decode(errors='replace')[:500]}"
                 except Exception as e:
                     result["email_result"] = f"Email exception: {e}"
 

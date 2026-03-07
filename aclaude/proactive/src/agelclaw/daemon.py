@@ -927,12 +927,14 @@ async def execute_subagent_task(task: dict, cycle_session: str):
         if sa_has_mcp:
             execution_section = (
                 f"## MCP-FIRST EXECUTION\n"
-                f"This subagent has dedicated MCP tools. Use them directly — do NOT search for skills.\n\n"
+                f"This subagent has dedicated MCP tools. Use them directly — do NOT search for skills.\n"
+                f"Read your system prompt CAREFULLY — it contains specific instructions on which tools to use for each operation.\n"
+                f"If the prompt says to use a Bash script instead of an MCP tool, FOLLOW THAT INSTRUCTION.\n\n"
             )
             steps_section = (
                 f"## STEPS (follow exactly)\n"
                 f"1. `agelclaw-mem start_task {task_id}`\n"
-                f"2. Use your MCP tools (mcp__*__) to execute the task\n"
+                f"2. Follow your system prompt instructions for the specific operation\n"
                 f"3. Save outputs to {task_folder}\n"
                 f"4. `agelclaw-mem complete_task {task_id} \"<result in Greek>\"`\n"
                 f"5. STOP. Do not continue after complete_task.\n\n"
@@ -986,8 +988,9 @@ async def execute_subagent_task(task: dict, cycle_session: str):
             + execution_section
             + f"## TOOL GUARD (CRITICAL)\n"
             f"NEVER use these tools — they do NOT exist and will freeze your execution:\n"
-            f"TodoWrite, TodoRead, Task, EnterPlanMode, AskUserQuestion, ExitPlanMode, TaskCreate, TaskUpdate, ToolSearch.\n"
-            f"Available tools: {', '.join(sa_tools)} + any mcp__*__ tools listed in your instructions.\n\n"
+            f"TodoWrite, TodoRead, Task, EnterPlanMode, AskUserQuestion, ExitPlanMode, TaskCreate, TaskUpdate.\n"
+            f"Available tools: {', '.join(sa_tools)} + any mcp__*__ tools listed in your instructions.\n"
+            f"Use ToolSearch ONLY if you need to discover mcp__*__ tools. Do NOT use it for anything else.\n\n"
             f"## STRICT RULES\n"
             f"- Execute ONLY what the task description says. Nothing more.\n"
             f"- Do NOT fix, improve, or change anything outside the task scope.\n"
