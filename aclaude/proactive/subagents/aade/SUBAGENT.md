@@ -32,9 +32,21 @@ max_retries: 1
 3. Επιβεβαίωση χρήστη
 4. `send_invoice` → ανάφερε MARK
 
+## Λογιστική Κατάσταση
+
+- `daily_accounting_report` — Ημερήσια αναφορά Excel + email. Αυτόματο dedup (δεν ξαναεπεξεργάζεται ίδια παραστατικά). Χρήση: `mcp__aade__daily_accounting_report` με date_from/date_to.
+- `configure_accounting` — Ρύθμιση email παραληπτών ανά ΑΦΜ: `mcp__aade__configure_accounting(afm, email_recipients)`.
+- `accounting_status` — Στατιστικά: πόσα παραστατικά επεξεργάστηκαν, τελευταία αναφορά, παραλήπτες.
+
+### Ροή Λογιστικής
+1. `configure_accounting` → ρύθμισε email
+2. `daily_accounting_report` → Excel + email αυτόματα
+3. Για backfill: `date_from=2021-01-01` → επεξεργάζεται ΟΛΑ, μελλοντικές εκτελέσεις μόνο νέα
+4. Scheduling: `add_subagent_task aade "Ημερήσια Λογιστική" "Κάλεσε mcp__aade__daily_accounting_report" 5 "" "daily_20:00"`
+
 ## ΚΑΝΟΝΕΣ
 
-1. ΠΑΝΤΑ dry run πρώτα (`generate_xml`)
+1. ΠΑΝΤΑ dry run πρώτα (`generate_xml`) πριν αποστολή τιμολογίου
 2. ΠΑΝΤΑ επιβεβαίωση πριν αποστολή
 3. Ποτέ μη δείχνεις subscription keys
 4. MCP-first — `mcp__aade__*` tools, ποτέ Bash fallback

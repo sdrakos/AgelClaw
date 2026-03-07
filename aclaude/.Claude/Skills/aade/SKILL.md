@@ -403,6 +403,45 @@ Read these files for complete implementations:
 
 ---
 
+## Daily Accounting Service
+
+The AADE MCP server includes a daily accounting service for automated bookkeeping:
+
+### Setup
+```bash
+# 1. Configure email recipients for an AFM
+mcp__aade__configure_accounting(afm="999999999", email_recipients="logistis@example.com")
+
+# 2. Run a report (today by default)
+mcp__aade__daily_accounting_report(issuer_afm="999999999")
+
+# 3. Backfill historical data
+mcp__aade__daily_accounting_report(issuer_afm="999999999", date_from="2021-01-01", date_to="2026-03-07")
+
+# 4. Schedule daily at 20:00
+agelclaw-mem add_subagent_task aade "Ημερήσια Λογιστική ΑΑΔΕ" \
+  "Κάλεσε mcp__aade__daily_accounting_report" 5 "" "daily_20:00"
+
+# 5. Check statistics
+mcp__aade__accounting_status(afm="999999999")
+```
+
+### Features
+- **Deduplication**: Each invoice (MARK) is tracked in SQLite. Re-runs skip already processed invoices.
+- **Excel output**: 3 sheets — Έσοδα (Income), Έξοδα (Expenses), Σύνοψη (Summary with VAT, categories, profit/loss).
+- **Email delivery**: Sends Excel as attachment via Microsoft Graph (requires `microsoft-graph-email` skill).
+- **Multi-AFM**: One task per AFM for accountants managing multiple businesses.
+- **Idempotent**: Safe to run multiple times — duplicates are automatically skipped.
+
+### Excel Sheets
+| Sheet | Content |
+|-------|---------|
+| Έσοδα | Αριθμ. | Σειρά/ΑΑ | Τύπος | ΑΦΜ Πελάτη | Καθαρή | ΦΠΑ | Μικτή | MARK |
+| Έξοδα | Same structure with ΑΦΜ Προμηθευτή |
+| Σύνοψη | Ανά κατηγορία, ΦΠΑ, Αποτέλεσμα (Κέρδος/Ζημία), Metadata |
+
+---
+
 ## Important Notes
 
 1. **XML field order matters** — AADE validates not just the content but the order of XML elements. Always use the builder functions.

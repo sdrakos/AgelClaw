@@ -1,7 +1,7 @@
 ---
 name: aade
-description: AADE myDATA invoice management - send, receive, cancel invoices and manage multi-AFM credentials via the Greek tax authority API
-version: 1.0.0
+description: AADE myDATA invoice management + daily accounting reports — send, receive, cancel invoices, manage multi-AFM credentials, and generate Excel accounting reports via the Greek tax authority API
+version: 1.1.0
 command: python
 args: [server.py]
 auto_load: false
@@ -17,16 +17,19 @@ tools:
   - list_credentials
   - remove_credentials
   - set_default_afm
+  - daily_accounting_report
+  - configure_accounting
+  - accounting_status
 ---
 
 # AADE myDATA MCP Server
 
-AADE myDATA invoice management for AI agents. Supports multi-AFM credential storage via SQLite for accountants and multi-entity businesses.
+AADE myDATA invoice management and daily accounting for AI agents. Supports multi-AFM credential storage via SQLite for accountants and multi-entity businesses.
 
 ## Dependencies
 
 ```bash
-pip install httpx lxml python-dotenv
+pip install httpx lxml python-dotenv openpyxl
 ```
 
 ## Configuration
@@ -57,3 +60,8 @@ ISSUER_BRANCH=0
 - **list_credentials** -- List all stored AFMs (no secrets shown)
 - **remove_credentials** -- Remove credentials for an AFM
 - **set_default_afm** -- Set which AFM is used by default when issuer_afm is not specified
+
+### Λογιστική (Accounting)
+- **daily_accounting_report** -- Ημερήσια λογιστική αναφορά: ανακτά παραστατικά από ΑΑΔΕ, αποκλείει ήδη επεξεργασμένα (dedup), δημιουργεί Excel (Έσοδα/Έξοδα/Σύνοψη), αποστέλλει email. Idempotent — επαναληπτική εκτέλεση αγνοεί ήδη καταχωρημένα.
+- **configure_accounting** -- Ρύθμιση email παραληπτών για ημερήσιες αναφορές ανά ΑΦΜ
+- **accounting_status** -- Στατιστικά λογιστικής: σύνολο επεξεργασμένων, τελευταία αναφορά, παραλήπτες

@@ -1,17 +1,19 @@
 """
 AADE myDATA MCP Server
 ======================
-Invoice management and multi-AFM credential storage via the Greek tax
-authority REST API.
+Invoice management, multi-AFM credential storage, and daily accounting
+reports via the Greek tax authority REST API.
 
 Tools: send_invoice, get_invoices, cancel_invoice, income_summary,
        expenses_summary, generate_xml, add_credentials, list_credentials,
-       remove_credentials, set_default_afm
+       remove_credentials, set_default_afm, daily_accounting_report,
+       configure_accounting, accounting_status
 """
 import asyncio
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 from datetime import date, datetime
 from decimal import Decimal
@@ -115,6 +117,33 @@ class CredentialStore:
                     value TEXT
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS processed_invoices (
+                    mark TEXT NOT NULL,
+                    afm TEXT NOT NULL,
+                    direction TEXT NOT NULL,
+                    issue_date TEXT,
+                    invoice_type TEXT,
+                    type_name TEXT,
+                    series TEXT,
+                    aa TEXT,
+                    counterpart_vat TEXT,
+                    net_value REAL DEFAULT 0,
+                    vat_amount REAL DEFAULT 0,
+                    gross_value REAL DEFAULT 0,
+                    processed_at TEXT DEFAULT (datetime('now')),
+                    report_date TEXT,
+                    PRIMARY KEY (mark, afm, direction)
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS accounting_settings (
+                    afm TEXT NOT NULL,
+                    key TEXT NOT NULL,
+                    value TEXT,
+                    PRIMARY KEY (afm, key)
+                )
+            """)
 
     def add(self, afm, user_id, subscription_key, env="dev", country="GR", branch=0, label=""):
         with sqlite3.connect(str(self.db_path)) as conn:
@@ -155,6 +184,87 @@ class CredentialStore:
         with sqlite3.connect(str(self.db_path)) as conn:
             row = conn.execute("SELECT value FROM settings WHERE key='default_afm'").fetchone()
             return row[0] if row else None
+
+    # ── Accounting methods ──
+
+    def is_invoice_processed(self, mark: str, afm: str, direction: str) -> bool:
+        with sqlite3.connect(str(self.db_path)) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM processed_invoices WHERE mark=? AND afm=? AND direction=?",
+                (mark, afm, direction),
+            ).fetchone()
+            return row is not None
+
+    def mark_invoices_processed(self, invoices: list, afm: str, direction: str,
+                                report_date: str) -> int:
+        """Insert invoices into processed_invoices. Returns count of newly inserted."""
+        inserted = 0
+        with sqlite3.connect(str(self.db_path)) as conn:
+            for inv in invoices:
+                try:
+                    changes_before = conn.total_changes
+                    conn.execute("""
+                        INSERT OR IGNORE INTO processed_invoices
+                        (mark, afm, direction, issue_date, invoice_type, type_name,
+                         series, aa, counterpart_vat, net_value, vat_amount, gross_value, report_date)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        str(inv.get("mark", "")),
+                        afm,
+                        direction,
+                        inv.get("issueDate", ""),
+                        inv.get("invoiceType", ""),
+                        inv.get("type_name", ""),
+                        inv.get("series", ""),
+                        inv.get("aa", ""),
+                        inv.get("counterpart_vat", ""),
+                        float(inv.get("totalNetValue", 0)),
+                        float(inv.get("totalVatAmount", 0)),
+                        float(inv.get("totalGrossValue", 0)),
+                        report_date,
+                    ))
+                    if conn.total_changes > changes_before:
+                        inserted += 1
+                except Exception:
+                    pass
+            conn.commit()
+        return inserted
+
+    def get_accounting_setting(self, afm: str, key: str, default=None) -> Optional[str]:
+        with sqlite3.connect(str(self.db_path)) as conn:
+            row = conn.execute(
+                "SELECT value FROM accounting_settings WHERE afm=? AND key=?",
+                (afm, key),
+            ).fetchone()
+            return row[0] if row else default
+
+    def set_accounting_setting(self, afm: str, key: str, value: str):
+        with sqlite3.connect(str(self.db_path)) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO accounting_settings (afm, key, value) VALUES (?, ?, ?)",
+                (afm, key, value),
+            )
+
+    def get_accounting_stats(self, afm: str) -> dict:
+        with sqlite3.connect(str(self.db_path)) as conn:
+            total = conn.execute(
+                "SELECT COUNT(*) FROM processed_invoices WHERE afm=?", (afm,)
+            ).fetchone()[0]
+            sent = conn.execute(
+                "SELECT COUNT(*) FROM processed_invoices WHERE afm=? AND direction='sent'", (afm,)
+            ).fetchone()[0]
+            received = conn.execute(
+                "SELECT COUNT(*) FROM processed_invoices WHERE afm=? AND direction='received'", (afm,)
+            ).fetchone()[0]
+            last_report = conn.execute(
+                "SELECT MAX(report_date) FROM processed_invoices WHERE afm=?", (afm,)
+            ).fetchone()[0]
+            return {
+                "total_processed": total,
+                "sent": sent,
+                "received": received,
+                "last_report_date": last_report,
+            }
 
 
 cred_store = CredentialStore()
@@ -367,13 +477,14 @@ def _build_invoice_xml(client, counterpart_vat, invoice_type, series, number,
     etree.SubElement(issuer, "country").text = client.issuer_country
     etree.SubElement(issuer, "branch").text = str(client.issuer_branch)
 
-    # Counterpart
-    cp = etree.SubElement(inv, "counterpart")
-    etree.SubElement(cp, "vatNumber").text = counterpart_vat
-    etree.SubElement(cp, "country").text = counterpart_country
-    if counterpart_name and counterpart_country != "GR":
-        etree.SubElement(cp, "name").text = counterpart_name
-    etree.SubElement(cp, "branch").text = "0"
+    # Counterpart (omit for retail receipt types 11.x – AADE forbids it)
+    if not invoice_type.startswith("11."):
+        cp = etree.SubElement(inv, "counterpart")
+        etree.SubElement(cp, "vatNumber").text = counterpart_vat
+        etree.SubElement(cp, "country").text = counterpart_country
+        if counterpart_name and counterpart_country != "GR":
+            etree.SubElement(cp, "name").text = counterpart_name
+        etree.SubElement(cp, "branch").text = "0"
 
     # Invoice header
     header = etree.SubElement(inv, "invoiceHeader")
@@ -582,6 +693,191 @@ def _set_default_afm(args: dict) -> str:
     return json.dumps({"status": "ok", "default_afm": args["afm"]}, ensure_ascii=False)
 
 
+# ── Accounting Tool Implementations ──
+
+def _find_send_email_script() -> Optional[Path]:
+    """Search multiple locations for the send_email.py script."""
+    candidates = [
+        # Bundled in package data
+        Path(__file__).resolve().parent.parent.parent / "src" / "agelclaw" / "data" / "skills" / "microsoft-graph-email" / "scripts" / "send_email.py",
+        # Project skills dir
+        Path.home() / ".agelclaw" / ".Claude" / "Skills" / "microsoft-graph-email" / "scripts" / "send_email.py",
+        # User skills dir
+        Path.home() / ".claude" / "skills" / "microsoft-graph-email" / "scripts" / "send_email.py",
+    ]
+    # Also search upward from this file
+    d = Path(__file__).resolve().parent
+    for _ in range(10):
+        for sub in [
+            ".Claude/Skills/microsoft-graph-email/scripts/send_email.py",
+            "proactive/skills/microsoft-graph-email/scripts/send_email.py",
+        ]:
+            p = d / sub
+            if p.exists():
+                return p
+        d = d.parent
+
+    for p in candidates:
+        if p.exists():
+            return p
+    return None
+
+
+async def _daily_accounting_report(args: dict) -> str:
+    """Fetch invoices, deduplicate, generate Excel, optionally email."""
+    from accounting_xlsx import generate_xlsx
+
+    afm = args.get("issuer_afm") or cred_store.get_default() or os.environ.get("ISSUER_VAT", "")
+    if not afm:
+        return json.dumps({"error": "No AFM specified. Use issuer_afm or set a default."}, ensure_ascii=False)
+
+    today = date.today().isoformat()
+    date_from = args.get("date_from", today)
+    date_to = args.get("date_to", today)
+    send_email = args.get("send_email", True)
+    email_to = args.get("email_to", "")
+
+    # Fetch invoices from AADE
+    client = MyDataClient.from_db_or_env(afm)
+    try:
+        all_sent = await client.get_sent_invoices(0, date_from, date_to)
+        all_received = await client.get_received_invoices(0, date_from, date_to)
+    finally:
+        await client.close()
+
+    # Filter out raw/error responses (they have a "raw" key)
+    if all_sent and isinstance(all_sent[0], dict) and "raw" in all_sent[0]:
+        all_sent = []
+    if all_received and isinstance(all_received[0], dict) and "raw" in all_received[0]:
+        all_received = []
+
+    # Deduplicate: skip already processed
+    new_sent = [
+        inv for inv in all_sent
+        if inv.get("mark") and not cred_store.is_invoice_processed(str(inv["mark"]), afm, "sent")
+    ]
+    new_received = [
+        inv for inv in all_received
+        if inv.get("mark") and not cred_store.is_invoice_processed(str(inv["mark"]), afm, "received")
+    ]
+
+    skipped_sent = len(all_sent) - len(new_sent)
+    skipped_received = len(all_received) - len(new_received)
+
+    result = {
+        "afm": afm,
+        "period": f"{date_from} — {date_to}",
+        "new_income": len(new_sent),
+        "new_expenses": len(new_received),
+        "skipped_dupes": skipped_sent + skipped_received,
+    }
+
+    if not new_sent and not new_received:
+        result["message"] = "Δεν βρέθηκαν νέα παραστατικά για αυτή την περίοδο."
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    # Generate Excel
+    reports_dir = Path.home() / ".agelclaw" / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"accounting_{afm}_{date_from}_{date_to}.xlsx"
+    xlsx_path = reports_dir / filename
+
+    generate_xlsx(xlsx_path, new_sent, new_received, afm, date_from, date_to)
+    result["xlsx_path"] = str(xlsx_path)
+
+    # Mark as processed
+    cred_store.mark_invoices_processed(new_sent, afm, "sent", today)
+    cred_store.mark_invoices_processed(new_received, afm, "received", today)
+
+    # Compute totals for email summary
+    income_net = sum(float(inv.get("totalNetValue", 0)) for inv in new_sent)
+    income_vat = sum(float(inv.get("totalVatAmount", 0)) for inv in new_sent)
+    expense_net = sum(float(inv.get("totalNetValue", 0)) for inv in new_received)
+    expense_vat = sum(float(inv.get("totalVatAmount", 0)) for inv in new_received)
+
+    result["totals"] = {
+        "income_net": round(income_net, 2),
+        "income_vat": round(income_vat, 2),
+        "expense_net": round(expense_net, 2),
+        "expense_vat": round(expense_vat, 2),
+        "profit": round(income_net - expense_net, 2),
+    }
+
+    # Email
+    if send_email:
+        recipients = email_to or cred_store.get_accounting_setting(afm, "email_recipients", "")
+        if not recipients:
+            result["email_result"] = "Δεν έχουν οριστεί παραλήπτες. Χρησιμοποίησε configure_accounting."
+        else:
+            script = _find_send_email_script()
+            if not script:
+                result["email_result"] = "Δεν βρέθηκε το send_email.py script."
+            else:
+                subject = f"Λογιστική Κατάσταση ΑΑΔΕ - ΑΦΜ {afm} ({date_from})"
+                body = (
+                    f"<h2>Λογιστική Κατάσταση ΑΑΔΕ</h2>"
+                    f"<p><b>ΑΦΜ:</b> {afm} | <b>Περίοδος:</b> {date_from} — {date_to}</p>"
+                    f"<table border='1' cellpadding='5' cellspacing='0'>"
+                    f"<tr><td><b>Νέα Έσοδα</b></td><td>{len(new_sent)} ({income_net:,.2f} €)</td></tr>"
+                    f"<tr><td><b>Νέα Έξοδα</b></td><td>{len(new_received)} ({expense_net:,.2f} €)</td></tr>"
+                    f"<tr><td><b>ΦΠΑ Εσόδων</b></td><td>{income_vat:,.2f} €</td></tr>"
+                    f"<tr><td><b>ΦΠΑ Εξόδων</b></td><td>{expense_vat:,.2f} €</td></tr>"
+                    f"<tr><td><b>Κέρδος/Ζημία</b></td><td>{income_net - expense_net:,.2f} €</td></tr>"
+                    f"</table>"
+                    f"<p>Δείτε τα αναλυτικά στοιχεία στο συνημμένο Excel.</p>"
+                )
+                try:
+                    proc = subprocess.run(
+                        [sys.executable, str(script),
+                         "--to", recipients,
+                         "--subject", subject,
+                         "--body", body,
+                         "--attachment", str(xlsx_path)],
+                        capture_output=True, text=True, timeout=60,
+                    )
+                    if proc.returncode == 0:
+                        result["email_result"] = f"Email στάλθηκε στο {recipients}"
+                    else:
+                        result["email_result"] = f"Email error: {proc.stderr[:500]}"
+                except Exception as e:
+                    result["email_result"] = f"Email exception: {e}"
+
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+def _configure_accounting(args: dict) -> str:
+    """Configure accounting settings for an AFM."""
+    afm = args.get("afm", "")
+    if not afm:
+        return json.dumps({"error": "AFM is required"}, ensure_ascii=False)
+
+    updated = []
+    if "email_recipients" in args:
+        cred_store.set_accounting_setting(afm, "email_recipients", args["email_recipients"])
+        updated.append(f"email_recipients={args['email_recipients']}")
+
+    return json.dumps({
+        "status": "ok",
+        "afm": afm,
+        "updated": updated,
+        "current_settings": {
+            "email_recipients": cred_store.get_accounting_setting(afm, "email_recipients", ""),
+        },
+    }, ensure_ascii=False, indent=2)
+
+
+def _accounting_status(args: dict) -> str:
+    """Get accounting statistics for an AFM."""
+    afm = args.get("afm") or cred_store.get_default() or os.environ.get("ISSUER_VAT", "")
+    if not afm:
+        return json.dumps({"error": "No AFM specified"}, ensure_ascii=False)
+
+    stats = cred_store.get_accounting_stats(afm)
+    stats["afm"] = afm
+    stats["email_recipients"] = cred_store.get_accounting_setting(afm, "email_recipients", "")
+    return json.dumps(stats, ensure_ascii=False, indent=2)
+
+
 # ── MCP Server Setup ──
 
 server = Server("aade")
@@ -780,6 +1076,42 @@ TOOLS = [
             "required": ["afm"],
         },
     ),
+    Tool(
+        name="daily_accounting_report",
+        description="Generate daily accounting report: fetch invoices from AADE, deduplicate, create Excel (income/expenses/summary sheets), and optionally email. Idempotent — re-runs skip already processed invoices.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "issuer_afm": {"type": "string", "description": "AFM (uses default if omitted)"},
+                "date_from": {"type": "string", "description": "Start date YYYY-MM-DD (default: today)"},
+                "date_to": {"type": "string", "description": "End date YYYY-MM-DD (default: today)"},
+                "send_email": {"type": "boolean", "description": "Send Excel via email (default: true)", "default": True},
+                "email_to": {"type": "string", "description": "Override email recipients (comma-separated)"},
+            },
+        },
+    ),
+    Tool(
+        name="configure_accounting",
+        description="Configure accounting settings for an AFM — email recipients for daily reports.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "afm": {"type": "string", "description": "Greek VAT number (AFM)"},
+                "email_recipients": {"type": "string", "description": "Comma-separated email addresses for report delivery"},
+            },
+            "required": ["afm"],
+        },
+    ),
+    Tool(
+        name="accounting_status",
+        description="Get accounting statistics: total processed invoices, last report date, configured email recipients.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "afm": {"type": "string", "description": "AFM (uses default if omitted)"},
+            },
+        },
+    ),
 ]
 
 
@@ -821,6 +1153,12 @@ async def _handle_tool(name: str, args: dict) -> str:
         return _remove_credentials(args)
     elif name == "set_default_afm":
         return _set_default_afm(args)
+    elif name == "daily_accounting_report":
+        return await _daily_accounting_report(args)
+    elif name == "configure_accounting":
+        return _configure_accounting(args)
+    elif name == "accounting_status":
+        return _accounting_status(args)
     else:
         return json.dumps({"error": f"Unknown tool: {name}"})
 
