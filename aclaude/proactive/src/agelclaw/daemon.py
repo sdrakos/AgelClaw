@@ -72,7 +72,7 @@ TASK_INACTIVITY_TIMEOUT = int(_cfg.get("task_inactivity_timeout", 120))  # 2 min
 SCRIPT_TIMEOUT = int(_cfg.get("script_timeout", 7200))  # 2 hours max for direct script tasks
 
 _router = AgentRouter()
-from agelclaw.project import get_project_dir, get_log_dir, get_skills_dir, get_persona_dir
+from agelclaw.project import get_project_dir, get_log_dir, get_skills_dir, get_persona_dir, get_mcp_servers_dir, get_bundled_mcp_servers_dir
 LOG_DIR = get_log_dir()
 
 logging.basicConfig(
@@ -790,6 +790,76 @@ async def execute_single_task(task: dict, cycle_session: str):
                 agent_status["state"] = "idle"
 
 
+def _get_mcp_tools_for_prompt(mcp_configs: dict) -> str:
+    """Build a prompt section listing all available MCP tools for a subagent.
+
+    Reads SERVER.md for each loaded MCP server and returns formatted tool listing
+    so the subagent can call MCP tools directly without ToolSearch discovery.
+    """
+    if not mcp_configs:
+        return ""
+
+    sections = []
+    for name in sorted(mcp_configs.keys()):
+        # Find SERVER.md in project dir first, then bundled
+        server_md = None
+        for base in [get_mcp_servers_dir(), get_bundled_mcp_servers_dir()]:
+            candidate = base / name / "SERVER.md"
+            if candidate.exists():
+                server_md = candidate
+                break
+
+        if not server_md:
+            continue
+
+        try:
+            content = server_md.read_text(encoding="utf-8", errors="replace").strip()
+
+            # Parse YAML frontmatter for tools list
+            fm_match = re.search(r'^---\s*\n(.*?)\n---', content, re.DOTALL)
+            if not fm_match:
+                continue
+            fm = fm_match.group(1)
+
+            tools_block = re.search(r'tools:\s*\n((?:\s+-\s+.+\n?)+)', fm)
+            if not tools_block:
+                continue
+            tools_list = [
+                line.strip().lstrip("- ").strip()
+                for line in tools_block.group(1).strip().split("\n")
+                if line.strip().startswith("-")
+            ]
+
+            # Parse tool descriptions from markdown body (pattern: "- **tool_name** -- description")
+            body = content[fm_match.end():]
+            tool_descs = {}
+            for m in re.finditer(r'-\s+\*\*(\w+)\*\*\s+--\s+(.+)', body):
+                tool_descs[m.group(1)] = m.group(2).strip()
+
+            # Build tool entries
+            entries = []
+            for tool in tools_list:
+                desc = tool_descs.get(tool, "")
+                entry = f"- `mcp__{name}__{tool}`"
+                if desc:
+                    entry += f" -- {desc}"
+                entries.append(entry)
+
+            if entries:
+                sections.append(f"### {name}\n" + "\n".join(entries))
+        except Exception:
+            continue
+
+    if not sections:
+        return ""
+
+    return (
+        "## AVAILABLE MCP TOOLS (use directly - no ToolSearch needed)\n"
+        "Call these tools by name. They are already loaded and ready.\n\n"
+        + "\n\n".join(sections)
+    )
+
+
 async def execute_subagent_task(task: dict, cycle_session: str):
     """Execute a task assigned to a subagent using SDK-native patterns.
 
@@ -881,6 +951,10 @@ async def execute_subagent_task(task: dict, cycle_session: str):
             f"- Test scripts after creating them (run with python)\n"
             f"- Include real working examples in skill body, not placeholders\n"
             f"- For long code: use Write tool to create files, then add_script with a short wrapper\n\n"
+            f"## TOOL GUARD (CRITICAL)\n"
+            f"NEVER use these tools — they do NOT exist and will freeze your execution:\n"
+            f"TodoWrite, TodoRead, Task, EnterPlanMode, AskUserQuestion, ExitPlanMode, TaskCreate, TaskUpdate, ToolSearch.\n"
+            f"Available tools: {', '.join(sa_tools)} + any mcp__*__ tools listed in your instructions.\n\n"
             f"## STRICT RULES\n"
             f"- Execute ONLY what the task description says. Nothing more.\n"
             f"- Do NOT fix, improve, or change anything outside the task scope.\n"
@@ -965,13 +1039,27 @@ async def execute_subagent_task(task: dict, cycle_session: str):
                 if mcp_configs:
                     allowed += _build_mcp_tool_wildcards(mcp_configs)
 
+                # Inject MCP tool listing into subagent prompt so it can call them directly
+                mcp_tools_section = _get_mcp_tools_for_prompt(mcp_configs)
+                enriched_body = sa["body"]
+                if mcp_tools_section:
+                    enriched_body += "\n\n" + mcp_tools_section
+                    log.info(f"[Subagent '{subagent_name}' Task #{task_id}] Injected MCP tool listing ({len(mcp_configs)} servers)")
+
+                # Minimal outer prompt — the subagent has its own detailed prompt.
+                # Full _get_daemon_prompt() is too large for Windows CLI limit (32K chars).
+                outer_prompt = (
+                    f"You are a task executor. Delegate the task to the '{subagent_name}' agent. "
+                    f"Do not execute the task yourself — always use the subagent."
+                )
+
                 options = ClaudeAgentOptions(
-                    system_prompt=_get_daemon_prompt(),
+                    system_prompt=outer_prompt,
                     allowed_tools=allowed,
                     agents={
                         subagent_name: AgentDefinition(
                             description=sa["description"],
-                            prompt=sa["body"],
+                            prompt=enriched_body,
                             tools=sa_tools,
                             model="sonnet",
                         ),

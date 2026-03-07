@@ -253,7 +253,9 @@ proactive/src/agelclaw/           # Python package (pip install)
 
 **Auto-retry for failed tasks.** Subagents can specify `max_retries` in SUBAGENT.md frontmatter (default 0). When a task fails (timeout or exception) and retries remain, the daemon resets it to `pending` with incremented `retry_count` in task metadata, then wakes the scheduler. Telegram notification includes retry status.
 
-**Tool hallucination guard.** System prompt explicitly lists the ONLY available tools and warns against using non-existent tools (e.g. `TodoWrite`, `Task`, `TodoRead`) which cause the agent to freeze waiting for a response that never comes.
+**Tool hallucination guard.** System prompt explicitly lists the ONLY available tools and warns against using non-existent tools (e.g. `TodoWrite`, `Task`, `TodoRead`) which cause the agent to freeze waiting for a response that never comes. The `task_prompt` in `execute_subagent_task()` includes a TOOL GUARD section listing all forbidden tools.
+
+**Dynamic MCP tool injection for subagents.** `daemon.py` has `_get_mcp_tools_for_prompt(mcp_configs)` which reads `SERVER.md` for each loaded MCP server, parses the YAML `tools:` list and markdown tool descriptions (`**name** -- desc`), and returns a formatted prompt section listing all `mcp__{server}__{tool}` names with descriptions. This is injected into the `AgentDefinition.prompt` (via `enriched_body`) in the Claude path of `execute_subagent_task()`. Result: subagents know all available MCP tools from the start — zero ToolSearch calls, zero hallucinated tool calls, ~60s saved per task.
 
 **Skill-first execution.** Before any task, agents call `agelclaw-mem find_skill "<description>"`. If no match: research, create skill (SKILL.md + scripts/ + references/), then execute.
 
