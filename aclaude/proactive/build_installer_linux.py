@@ -27,7 +27,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 # ── Configuration ──────────────────────────────────────────
-VERSION = "3.1.1"
+VERSION = "3.1.2"
 NODE_VERSION = "22.12.0"
 
 ROOT = Path(__file__).parent.resolve()
@@ -68,7 +68,6 @@ def step_nuitka():
     cmd = [
         sys.executable, "-m", "nuitka",
         "--standalone",
-        "--zig",
         "--assume-yes-for-downloads",
         f"--jobs={nproc}",
         f"--output-dir={BUILD_DIR}",

@@ -20,6 +20,8 @@ tools:
   - daily_accounting_report
   - configure_accounting
   - accounting_status
+  - lookup_afm
+  - validate_afm
 ---
 
 # AADE myDATA MCP Server

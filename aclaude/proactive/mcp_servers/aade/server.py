@@ -20,11 +20,21 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Optional
 
+import re
+
 import httpx
 from lxml import etree
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
+
+try:
+    from zeep import Client as SoapClient
+    from zeep.transports import Transport
+    from zeep.wsse.username import UsernameToken
+    HAS_ZEEP = True
+except ImportError:
+    HAS_ZEEP = False
 
 
 # ── .env loading (search upward) ──
@@ -86,6 +96,158 @@ VAT_RATES = {
 }
 
 DEFAULT_DB_PATH = Path.home() / ".agelclaw" / "data" / "mydata_credentials.db"
+AFM_CACHE_DB = Path.home() / ".agelclaw" / "data" / "afm_cache.db"
+GSIS_WSDL = "https://www1.gsis.gr/wsaade/RgWsPublic2/RgWsPublic2?WSDL"
+
+
+# ── AFM Validation & Lookup ──
+
+def _validate_afm(afm: str) -> bool:
+    """Validate Greek AFM using the official check digit algorithm."""
+    afm = afm.strip().replace("EL", "").replace("el", "")
+    if not re.match(r'^\d{9}$', afm):
+        return False
+    digits = [int(d) for d in afm]
+    total = sum(digits[i] * (2 ** (8 - i)) for i in range(8))
+    return (total % 11) % 10 == digits[8]
+
+
+class AFMCacheDB:
+    """SQLite cache for AFM lookup results."""
+
+    def __init__(self, db_path: Path = AFM_CACHE_DB):
+        self.db_path = db_path
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(str(self.db_path)) as conn:
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS businesses (
+                    afm TEXT PRIMARY KEY,
+                    data JSON NOT NULL,
+                    lookup_date TEXT NOT NULL
+                )
+            """)
+
+    def get(self, afm: str, max_age_days: int = 90) -> Optional[dict]:
+        with sqlite3.connect(str(self.db_path)) as conn:
+            row = conn.execute(
+                "SELECT data, lookup_date FROM businesses WHERE afm = ?", (afm,)
+            ).fetchone()
+        if not row:
+            return None
+        data = json.loads(row[0])
+        from datetime import timedelta
+        lookup_dt = datetime.fromisoformat(row[1])
+        if (datetime.now() - lookup_dt).days > max_age_days:
+            return None
+        return data
+
+    def put(self, afm: str, data: dict):
+        now = datetime.now().isoformat()
+        with sqlite3.connect(str(self.db_path)) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO businesses (afm, data, lookup_date) VALUES (?, ?, ?)",
+                (afm, json.dumps(data, ensure_ascii=False), now)
+            )
+
+    def list_all(self) -> list[dict]:
+        with sqlite3.connect(str(self.db_path)) as conn:
+            rows = conn.execute(
+                "SELECT afm, json_extract(data, '$.name'), "
+                "json_extract(data, '$.primary_kad'), lookup_date "
+                "FROM businesses ORDER BY lookup_date DESC"
+            ).fetchall()
+        return [{"afm": r[0], "name": r[1], "primary_kad": r[2], "cached": r[3]} for r in rows]
+
+
+def _soap_lookup_afm(afm: str) -> dict:
+    """Call AADE RgWsPublic2 SOAP service to look up business info."""
+    if not HAS_ZEEP:
+        raise RuntimeError("zeep not installed: pip install zeep")
+
+    username = os.environ.get("GSIS_AFM_USERNAME", "")
+    password = os.environ.get("GSIS_AFM_PASSWORD", "")
+    caller = os.environ.get("GSIS_CALLER_AFM", "")
+
+    if not username or not password:
+        raise ValueError("GSIS_AFM_USERNAME and GSIS_AFM_PASSWORD not set in .env")
+
+    transport = Transport(timeout=30)
+    wsse = UsernameToken(username, password)
+    client = SoapClient(GSIS_WSDL, transport=transport, wsse=wsse)
+
+    result = client.service.rgWsPublic2AfmMethod(
+        INPUT_REC={"afm_called_by": caller, "afm_called_for": afm}
+    )
+
+    # Check for errors
+    if result.error_rec and result.error_rec.error_code:
+        raise RuntimeError(f"AADE error: {result.error_rec.error_code} - {result.error_rec.error_descr}")
+
+    # Parse response
+    basic = result.basic_rec if hasattr(result, "basic_rec") else result
+    info = {
+        "afm": afm,
+        "name": getattr(basic, "onomasia", "") or "",
+        "commercial_title": getattr(basic, "commer_title", "") or "",
+        "doy_code": str(getattr(basic, "doy", "") or ""),
+        "doy_description": getattr(basic, "doy_descr", "") or "",
+        "legal_status": getattr(basic, "legal_status_descr", "") or "",
+        "is_active": str(getattr(basic, "deactivation_flag", "1")) != "2",
+        "address_street": getattr(basic, "postal_address", "") or "",
+        "address_number": getattr(basic, "postal_address_no", "") or "",
+        "address_postal_code": getattr(basic, "postal_zip_code", "") or "",
+        "address_city": getattr(basic, "postal_area_description", "") or "",
+        "kad_list": [],
+        "primary_kad": None,
+    }
+
+    if hasattr(result, "firm_act_tab") and result.firm_act_tab:
+        activities = result.firm_act_tab
+        if hasattr(activities, "item"):
+            for act in activities.item:
+                kad = {
+                    "code": str(getattr(act, "firm_act_code", "") or ""),
+                    "description": str(getattr(act, "firm_act_descr", "") or ""),
+                    "kind": str(getattr(act, "firm_act_kind_descr", "") or ""),
+                    "kind_code": int(getattr(act, "firm_act_kind", 2) or 2),
+                }
+                info["kad_list"].append(kad)
+                if kad["kind_code"] == 1:
+                    info["primary_kad"] = kad["code"]
+
+    if not info["primary_kad"] and info["kad_list"]:
+        info["primary_kad"] = info["kad_list"][0]["code"]
+
+    return info
+
+
+_afm_cache = AFMCacheDB()
+
+
+def _lookup_afm(afm: str, force_refresh: bool = False) -> str:
+    """Lookup AFM: cache first, then AADE SOAP."""
+    afm = afm.strip().replace("EL", "").replace("el", "")
+
+    if not _validate_afm(afm):
+        return json.dumps({"error": f"Invalid AFM: {afm} (check digit failed)"}, ensure_ascii=False)
+
+    # Check cache
+    if not force_refresh:
+        cached = _afm_cache.get(afm)
+        if cached:
+            cached["_source"] = "cache"
+            return json.dumps(cached, ensure_ascii=False, indent=2)
+
+    # SOAP call
+    try:
+        info = _soap_lookup_afm(afm)
+    except Exception as e:
+        return json.dumps({"error": f"AADE lookup failed: {e}"}, ensure_ascii=False)
+
+    _afm_cache.put(afm, info)
+    info["_source"] = "aade_live"
+    return json.dumps(info, ensure_ascii=False, indent=2)
 
 
 # ── Credential Store (SQLite) ──
@@ -1120,6 +1282,29 @@ TOOLS = [
             },
         },
     ),
+    Tool(
+        name="lookup_afm",
+        description="Look up business details from AADE by AFM. Returns: name, DOY, legal form, address, KAD codes (activity codes), active status. Uses local cache (90 days). WARNING: the AFM owner gets notified in TAXISnet.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "afm": {"type": "string", "description": "Greek AFM (9 digits)"},
+                "force_refresh": {"type": "boolean", "default": False, "description": "True to bypass cache and call AADE again"},
+            },
+            "required": ["afm"],
+        },
+    ),
+    Tool(
+        name="validate_afm",
+        description="Validate AFM check digit locally (no AADE call). Returns whether the number is mathematically valid.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "afm": {"type": "string", "description": "Greek AFM to validate"},
+            },
+            "required": ["afm"],
+        },
+    ),
 ]
 
 
@@ -1167,6 +1352,12 @@ async def _handle_tool(name: str, args: dict) -> str:
         return _configure_accounting(args)
     elif name == "accounting_status":
         return _accounting_status(args)
+    elif name == "lookup_afm":
+        return _lookup_afm(args["afm"], args.get("force_refresh", False))
+    elif name == "validate_afm":
+        afm = args["afm"].strip().replace("EL", "").replace("el", "")
+        valid = _validate_afm(afm)
+        return json.dumps({"afm": afm, "valid": valid, "message": "Valid AFM" if valid else "Invalid AFM (check digit failed)"})
     else:
         return json.dumps({"error": f"Unknown tool: {name}"})
 
