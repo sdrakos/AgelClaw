@@ -692,6 +692,7 @@ async def execute_single_task(task: dict, cycle_session: str):
         except Exception as e:
             duration = (datetime.now() - task_start).total_seconds()
             log.error(f"[Task #{task_id}] Error: {e}", exc_info=True)
+            memory.update_task(task_id, status="failed", error=str(e))
             memory.log_conversation(role="system", content=f"Task #{task_id} ERROR: {e}", session_id=session_id)
             _broadcast_event("task_error", {
                 "session_id": session_id,
@@ -1209,6 +1210,7 @@ async def execute_subagent_task(task: dict, cycle_session: str):
                     f"Error: {str(e)[:100]} — αυτόματο retry ({retry_count}/{sa_max_retries})", duration)
                 wake_event.set()
             else:
+                memory.update_task(task_id, status="failed", error=str(e))
                 memory.log_conversation(role="system", content=f"Subagent '{subagent_name}' Task #{task_id} ERROR: {e}", session_id=session_id)
                 _broadcast_event("task_error", {
                     "session_id": session_id,
@@ -1597,6 +1599,11 @@ async def run_agent_cycle(reason: str = "scheduled"):
     #        assigned_to → execute_subagent_task (AI agent with subagent prompt)
     #        else → execute_single_task (general daemon agent)
     agent_status["state"] = "running"
+    # Reserve ALL task IDs BEFORE launching any — prevents next cycle from
+    # picking up the same tasks while they wait for the semaphore (CRITICAL-1 fix)
+    for t in tasks_to_run:
+        running_task_ids.add(t["id"])
+
     for t in tasks_to_run:
         if t.get("assigned_to"):
             # Check if this subagent uses direct script execution
