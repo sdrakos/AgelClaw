@@ -111,6 +111,7 @@ EXPENSE_COLUMNS = [
     ("Τύπος", 8),
     ("Περιγραφή", 28),
     ("ΑΦΜ Προμηθευτή", 16),
+    ("Επωνυμία Προμηθευτή", 32),
     ("Καθαρή Αξία", 15),
     ("ΦΠΑ", 12),
     ("Μικτή Αξία", 15),
@@ -143,23 +144,42 @@ def _write_invoice_sheet(ws, invoices: list, direction: str):
         type_name = INVOICE_TYPE_NAMES.get(inv_type, inv.get("type_name", inv_type))
         series_aa = f"{inv.get('series', '')}/{inv.get('aa', '')}"
 
-        values = [
-            inv.get("issueDate", ""),
-            series_aa,
-            inv_type,
-            type_name,
-            inv.get("counterpart_vat", inv.get("issuer_vat", "")),
-            net,
-            vat,
-            gross,
-            inv.get("mark", ""),
-        ]
+        if direction == "expenses":
+            values = [
+                inv.get("issueDate", ""),
+                series_aa,
+                inv_type,
+                type_name,
+                inv.get("issuer_vat", ""),
+                inv.get("issuer_name", ""),
+                net,
+                vat,
+                gross,
+                inv.get("mark", ""),
+            ]
+        else:
+            values = [
+                inv.get("issueDate", ""),
+                series_aa,
+                inv_type,
+                type_name,
+                inv.get("counterpart_vat", inv.get("issuer_vat", "")),
+                net,
+                vat,
+                gross,
+                inv.get("mark", ""),
+            ]
+
+        # Determine which columns are currency (depends on direction)
+        num_cols = len(columns)
+        # Currency columns are always the 3rd, 2nd, and 1st before MARK
+        currency_cols = (num_cols - 3, num_cols - 2, num_cols - 1)  # net, vat, gross
 
         for col_idx, val in enumerate(values, 1):
             cell = ws.cell(row=row_idx, column=col_idx, value=val)
             cell.border = THIN_BORDER
             # Currency formatting for value columns
-            if col_idx in (6, 7, 8):
+            if col_idx in currency_cols:
                 cell.number_format = CURRENCY_FMT
                 cell.alignment = Alignment(horizontal="right")
             # Alternating row colors
@@ -169,9 +189,11 @@ def _write_invoice_sheet(ws, invoices: list, direction: str):
     # Totals row
     if invoices:
         total_row = len(invoices) + 2
+        num_cols = len(columns)
         ws.cell(row=total_row, column=4, value="ΣΥΝΟΛΟ").font = TOTAL_FONT
 
-        for col_idx in (6, 7, 8):
+        # Currency columns: net, vat, gross (3rd, 2nd, 1st before MARK)
+        for col_idx in (num_cols - 3, num_cols - 2, num_cols - 1):
             col_letter = get_column_letter(col_idx)
             cell = ws.cell(
                 row=total_row, column=col_idx,

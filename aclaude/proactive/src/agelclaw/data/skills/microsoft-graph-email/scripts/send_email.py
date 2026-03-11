@@ -9,6 +9,7 @@ Usage:
     python send_email.py --to "email@example.com" --subject "Subject" --body "Body text"
     python send_email.py --to "email@example.com" --subject "Subject" --html-file "report.html"
     python send_email.py --to "a@x.com,b@y.com" --subject "Subject" --body "Body" --cc "c@z.com"
+    python send_email.py --to "email@example.com" --subject "Subject" --body "Body" --from "info@timologia.me"
 """
 
 import argparse
@@ -179,6 +180,7 @@ def main():
     parser.add_argument("--bcc", default=None, help="BCC recipient(s), comma-separated")
     parser.add_argument("--importance", default="normal", choices=["low", "normal", "high"], help="Email importance")
     parser.add_argument("--attachment", dest="attachments", action="append", help="Attachment file path (can be used multiple times)")
+    parser.add_argument("--from", dest="from_email", default=None, help="Override sender email (e.g. info@timologia.me)")
     args = parser.parse_args()
 
     # Determine body content and type
@@ -216,6 +218,9 @@ def main():
     bcc_addresses = [addr.strip() for addr in args.bcc.split(",")] if args.bcc else None
 
     creds = load_credentials()
+    # Override sender email if --from is specified (same tenant credentials)
+    if args.from_email:
+        creds["user_email"] = args.from_email
     token = get_access_token(creds)
 
     result = send_email(

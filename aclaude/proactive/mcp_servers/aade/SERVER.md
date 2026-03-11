@@ -36,7 +36,7 @@ pip install httpx lxml python-dotenv openpyxl
 
 ## Configuration
 
-Credentials loaded from SQLite (`~/.agelclaw/data/mydata_credentials.db`) or `.env` fallback:
+Credentials loaded from SQLite (`<project_dir>/data/mydata_credentials.db`) or `.env` fallback. Project dir resolved: `AGELCLAW_HOME` → CWD with config.yaml → `~/.agelclaw/`.
 
 ```
 MYDATA_USER_ID=your-user-id

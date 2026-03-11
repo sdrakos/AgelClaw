@@ -21,14 +21,66 @@ from server import (
     CredentialStore,
     MyDataClient,
     _find_send_email_script,
+    _afm_cache,
+    _soap_lookup_afm,
+    _validate_afm,
     ENVIRONMENTS,
+    PROJECT_DIR,
 )
 from accounting_xlsx import generate_xlsx
 from datetime import date
 
 
+def _enrich_supplier_names(invoices: list) -> int:
+    """Add issuer_name to expense invoices by looking up issuer VAT numbers.
+
+    Uses AFM cache (90 days) first, then AADE SOAP for uncached VATs.
+    Returns the number of successfully resolved names.
+    """
+    # Collect unique VAT numbers
+    vat_set = set()
+    for inv in invoices:
+        vat = inv.get("issuer_vat", "").strip()
+        if vat and len(vat) == 9:
+            vat_set.add(vat)
+
+    if not vat_set:
+        return 0
+
+    # Batch lookup: cache first, then SOAP for misses
+    name_map = {}  # vat -> name
+    for vat in vat_set:
+        # Try cache first
+        cached = _afm_cache.get(vat)
+        if cached:
+            name_map[vat] = cached.get("name", "")
+            continue
+        # Try SOAP lookup
+        if _validate_afm(vat):
+            try:
+                info = _soap_lookup_afm(vat)
+                _afm_cache.put(vat, info)
+                name_map[vat] = info.get("name", "")
+            except Exception:
+                name_map[vat] = ""  # Failed lookup, leave empty
+        else:
+            name_map[vat] = ""
+
+    # Enrich invoices
+    resolved = 0
+    for inv in invoices:
+        vat = inv.get("issuer_vat", "").strip()
+        name = name_map.get(vat, "")
+        if name:
+            inv["issuer_name"] = name
+            resolved += 1
+
+    return resolved
+
+
 async def run_report(afm: str, date_from: str, date_to: str, env: str,
-                     send_email: bool, email_to: str, force: bool = False) -> dict:
+                     send_email: bool, email_to: str, force: bool = False,
+                     from_email: str = "") -> dict:
     """Same logic as _daily_accounting_report in server.py."""
     import os
 
@@ -89,8 +141,15 @@ async def run_report(afm: str, date_from: str, date_to: str, env: str,
         result["message"] = "No invoices found for this period."
         return result
 
+    # Enrich expenses with supplier names (from cache/AADE SOAP)
+    try:
+        resolved_names = _enrich_supplier_names(new_received)
+        result["supplier_names_resolved"] = resolved_names
+    except Exception as e:
+        result["supplier_names_error"] = str(e)
+
     # Generate Excel
-    reports_dir = Path.home() / ".agelclaw" / "reports"
+    reports_dir = PROJECT_DIR / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
     filename = f"accounting_{afm}_{date_from}_{date_to}.xlsx"
     xlsx_path = reports_dir / filename
@@ -118,6 +177,8 @@ async def run_report(afm: str, date_from: str, date_to: str, env: str,
 
     # Email
     if send_email:
+        # Resolve sender email: CLI arg → per-AFM setting → default (config.yaml)
+        effective_from = from_email or cred_store.get_accounting_setting(afm, "email_sender", "")
         recipients = email_to or cred_store.get_accounting_setting(afm, "email_recipients", "")
         if not recipients:
             result["email_result"] = "No recipients configured. Use configure_accounting."
@@ -141,12 +202,16 @@ async def run_report(afm: str, date_from: str, date_to: str, env: str,
                     f"<p>See attached Excel for details.</p>"
                 )
                 try:
-                    proc = subprocess.run(
-                        [sys.executable, str(script),
+                    cmd = [sys.executable, str(script),
                          "--to", recipients,
                          "--subject", subject,
                          "--body", body,
-                         "--attachment", str(xlsx_path)],
+                         "--attachment", str(xlsx_path)]
+                    # Override sender email (e.g. info@timologia.me)
+                    if effective_from:
+                        cmd.extend(["--from", effective_from])
+                    proc = subprocess.run(
+                        cmd,
                         capture_output=True, text=True, timeout=60,
                     )
                     if proc.returncode == 0:
@@ -170,7 +235,14 @@ def main():
     parser.add_argument("--no-email", action="store_true", help="Skip sending email")
     parser.add_argument("--email-to", default="", help="Override email recipients")
     parser.add_argument("--force", action="store_true", help="Skip dedup, include ALL invoices")
+    parser.add_argument("--from-email", default="", help="Override sender email (e.g. info@timologia.me)")
     args = parser.parse_args()
+
+    # Dynamic date aliases
+    if args.date_from == "month_start":
+        args.date_from = date.today().replace(day=1).isoformat()
+    if args.date_to == "month_start":
+        args.date_to = date.today().replace(day=1).isoformat()
 
     result = asyncio.run(run_report(
         afm=args.afm,
@@ -180,6 +252,7 @@ def main():
         send_email=not args.no_email,
         email_to=args.email_to,
         force=args.force,
+        from_email=args.from_email,
     ))
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

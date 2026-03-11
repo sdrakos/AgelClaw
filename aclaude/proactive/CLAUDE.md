@@ -194,7 +194,7 @@ proactive/src/agelclaw/           # Python package (pip install)
 ├── mem_cli.py                    # CLI bridge: agelclaw-mem <command> (Bash-callable, non-streaming)
 ├── skill_tools.py                # MCP tools for skill CRUD (7 tools)
 ├── embeddings.py                 # sqlite-vec + OpenAI embeddings for semantic search
-├── project.py                    # Project dir resolution (AGELCLAW_HOME → cwd → ~/.agelclaw)
+├── project.py                    # Project dir resolution (AGELCLAW_HOME → cwd → package upward → ~/.agelclaw)
 ├── setup_wizard.py               # Interactive config wizard
 ├── core/
 │   ├── config.py                 # YAML + env var config loader (singleton, cached)
@@ -235,11 +235,13 @@ INSTALLER_MANUAL.md               # Detailed manual for the Windows installer pi
 ### Project Directory (mutable user data)
 
 ```
-~/.agelclaw/                      # Default (or AGELCLAW_HOME, or cwd with config.yaml)
+~/.agelclaw/                      # Default (or AGELCLAW_HOME, or cwd, or package-upward with config.yaml)
 ├── config.yaml                   # API keys, provider, ports, limits
 ├── .env                          # Environment variables (generated from config)
 ├── .agelclaw                     # Marker file
 ├── data/agent_memory.db          # SQLite persistent memory
+├── data/mydata_credentials.db    # AADE multi-AFM credentials + processed invoices
+├── data/afm_cache.db             # AFM lookup cache (GSIS SOAP, 90-day TTL)
 ├── logs/daemon.log               # Daemon execution logs
 ├── tasks/task_<id>/              # Per-task output folders (task_info.json, result.md, artifacts)
 ├── subagents/<name>/SUBAGENT.md  # Subagent definitions (YAML frontmatter + instructions)
@@ -258,6 +260,8 @@ INSTALLER_MANUAL.md               # Detailed manual for the Windows installer pi
 
 **Package-based install.** Source in `src/agelclaw/`, installed via `pip install git+...`. CLI entry points: `agelclaw` (main) and `agelclaw-mem` (memory CLI). Bundled data (React build, skills, templates) in `data/`.
 
+**Project directory resolution.** `project.py`'s `get_project_dir()` resolves in order: (1) `AGELCLAW_HOME` env var, (2) CWD with `config.yaml` or `.agelclaw` marker file, (3) search upward from package location (editable install: `src/agelclaw/` → finds `proactive/config.yaml`), (4) `~/.agelclaw/` fallback. Step 3 ensures that regardless of CWD, editable installs always find `proactive/` as the project dir. The `.agelclaw` marker check uses `.is_file()` (not `.exists()`) to avoid matching the `~/.agelclaw/` directory. All SQLite DBs (`agent_memory.db`, `mydata_credentials.db`, `afm_cache.db`) live under `<project_dir>/data/`.
+
 **Auto-start daemon.** `cli_entry.py` has `_ensure_daemon(port)` / `_stop_daemon(proc)` helpers. Every command (`agelclaw`, `web`, `telegram`) checks if daemon is running via port check, starts it as subprocess if not, terminates on exit. `--no-daemon` flag to opt out.
 
 **Graceful daemon proxy.** `api_server.py` catches `httpx.ConnectError` on daemon proxy — returns SSE `daemon_offline` event for `/daemon/events` or HTTP 503 for other paths. No crash when daemon is down.
@@ -274,7 +278,7 @@ INSTALLER_MANUAL.md               # Detailed manual for the Windows installer pi
 
 **memory-tools MCP server.** Bundled auto-loaded MCP server that provides native tool access to all `agelclaw-mem` operations: tasks (pending, due, stats, add_task, complete_task), learnings, profile, skills, subagents. Replaces `Bash("agelclaw-mem <cmd>")` with direct `mcp__memory-tools__<cmd>` calls — 1 tool call instead of 4. Agent can still use `agelclaw-mem` via Bash as fallback.
 
-**AADE myDATA MCP server.** `mcp_servers/aade/` — self-contained MCP server for Greek electronic invoicing (AADE myDATA API). 13 tools: `send_invoice`, `get_invoices`, `cancel_invoice`, `income_summary`, `expenses_summary`, `generate_xml`, `add_credentials`, `list_credentials`, `remove_credentials`, `set_default_afm`, `daily_accounting_report`, `configure_accounting`, `accounting_status`. Multi-AFM credential storage via SQLite (`~/.agelclaw/data/mydata_credentials.db`). `auto_load: false` — loaded only by the AADE subagent via `mcp_servers: [aade]`. Dev URL: `mydataapidev.aade.gr`, prod: `mydatapi.aade.gr/myDATA`. AADE requires `dd/MM/yyyy` date format and `https://` namespace URIs for classification elements on dev.
+**AADE myDATA MCP server.** `mcp_servers/aade/` — self-contained MCP server for Greek electronic invoicing (AADE myDATA API). 14 tools: `send_invoice`, `get_invoices`, `cancel_invoice`, `income_summary`, `expenses_summary`, `generate_xml`, `add_credentials`, `list_credentials`, `remove_credentials`, `set_default_afm`, `daily_accounting_report`, `configure_accounting`, `accounting_status`, `lookup_afm`, `validate_afm`. Multi-AFM credential storage via SQLite (`<project_dir>/data/mydata_credentials.db`). AFM lookup cache at `<project_dir>/data/afm_cache.db`. Both DB paths resolved dynamically via `_find_project_dir()` in `server.py` (searches upward for `config.yaml`/`.agelclaw` marker, falls back to `~/.agelclaw/`; `AGELCLAW_HOME` env var takes priority). Reports saved to `<project_dir>/reports/`. `auto_load: false` — loaded only by the AADE subagent via `mcp_servers: [aade]`. Dev URL: `mydataapidev.aade.gr`, prod: `mydatapi.aade.gr/myDATA`. AADE requires `dd/MM/yyyy` date format and `https://` namespace URIs for classification elements on dev.
 
 **AADE daily accounting service.** `mcp_servers/aade/accounting_xlsx.py` generates Excel workbooks with 3 sheets (Έσοδα, Έξοδα, Σύνοψη). The `daily_accounting_report` tool fetches sent+received invoices from AADE, deduplicates via `processed_invoices` SQLite table (PK: mark+afm+direction), generates Excel, and emails via `send_email.py` (Microsoft Graph). Idempotent — re-runs skip already processed MARKs. `configure_accounting` sets email recipients per AFM. `accounting_status` returns processed counts and last report date. Schedule daily via `add_subagent_task aade "..." "..." 5 "" "daily_20:00"`. **Important:** The `mcp__aade__daily_accounting_report` MCP tool hangs on Windows due to stdio pipe issues with long-running subprocess calls. Subagents MUST use the Bash wrapper instead: `python mcp_servers/aade/run_report.py --afm <AFM> --date-from <FROM> --date-to <TO> --env prod`. The wrapper has identical logic and runs in ~3s.
 
@@ -284,7 +288,7 @@ INSTALLER_MANUAL.md               # Detailed manual for the Windows installer pi
 
 **MCP tools-first rule.** System prompt includes a general rule: if an MCP tool (`mcp__<server>__<tool>`) exists for an operation, always use it before falling back to Bash. MCP tools are native tool calls (faster) vs `agelclaw-mem` subprocess spawn (slower). This applies to all operations, not just memory — any MCP server's tools take priority over equivalent Bash commands. The coder subagent (SUBAGENT.md) also includes this rule with a full list of available MCP memory tools.
 
-**Search-upward .env pattern for skill scripts.** Skill scripts that need credentials (e.g. Outlook email) must NOT use hardcoded parent directory counts (`Path(__file__).parent.parent.parent.parent / ".env"`) because the depth varies between dev install and pip install. Instead, traverse parent directories upward looking for `proactive/.env` or `.env`. This rule is enforced in skill-creator SKILL.md and subagent-creator SKILL.md.
+**Search-upward path pattern for scripts.** Skill scripts and MCP servers that need project-dir resources (credentials, `.env`, SQLite DBs) must NOT use hardcoded parent directory counts (`Path(__file__).parent.parent...`) because the depth varies between dev install, pip install, and VPS deployment. Instead, use `_find_project_dir()` — traverse parent directories upward looking for `config.yaml`/`.agelclaw` marker, with `AGELCLAW_HOME` env var override. The AADE MCP server (`server.py`) uses this pattern for `mydata_credentials.db`, `afm_cache.db`, and `reports/`. Skill scripts use the same pattern for `.env` files. This rule is enforced in skill-creator SKILL.md and subagent-creator SKILL.md.
 
 **Notification script multi-path search.** `daemon.py`'s `send_task_notification()` searches multiple locations for the notification script: `~/.claude/skills/`, `get_skills_dir()`, and parent directory fallback (for when cwd is `proactive/` but skills are in `aclaude/.Claude/Skills/`).
 

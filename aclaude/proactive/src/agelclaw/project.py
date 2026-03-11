@@ -6,7 +6,8 @@ Resolves the user's project directory (mutable data) vs package directory (immut
 Resolution order for project directory:
   1. AGELCLAW_HOME environment variable (explicit)
   2. Current working directory if it contains config.yaml or .agelclaw marker
-  3. ~/.agelclaw/ default
+  3. Search upward from package location (for editable installs)
+  4. ~/.agelclaw/ default
 
 Package data (immutable, bundled in the wheel):
   src/agelclaw/data/react_dist/    — Pre-built React UI
@@ -57,7 +58,8 @@ def get_project_dir() -> Path:
     Resolution order:
       1. AGELCLAW_HOME env var
       2. CWD if it contains config.yaml or .agelclaw marker
-      3. ~/.agelclaw/
+      3. Search upward from package location (editable install finds proactive/)
+      4. ~/.agelclaw/
     """
     # 1. Explicit env var
     env_home = os.environ.get("AGELCLAW_HOME")
@@ -68,10 +70,20 @@ def get_project_dir() -> Path:
 
     # 2. CWD markers
     cwd = Path.cwd()
-    if (cwd / "config.yaml").exists() or (cwd / ".agelclaw").exists():
+    if (cwd / "config.yaml").is_file() or (cwd / ".agelclaw").is_file():
         return cwd
 
-    # 3. Default
+    # 3. Search upward from package location (editable install: src/agelclaw/ → proactive/)
+    d = Path(__file__).resolve().parent
+    for _ in range(10):
+        if (d / "config.yaml").is_file() or (d / ".agelclaw").is_file():
+            return d
+        parent = d.parent
+        if parent == d:
+            break
+        d = parent
+
+    # 4. Default
     default = Path.home() / ".agelclaw"
     default.mkdir(parents=True, exist_ok=True)
     return default

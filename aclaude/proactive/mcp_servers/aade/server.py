@@ -37,7 +37,26 @@ except ImportError:
     HAS_ZEEP = False
 
 
-# ── .env loading (search upward) ──
+# ── .env loading & project dir (search upward) ──
+
+def _find_project_dir() -> Path:
+    """Search parent directories for the project dir (has config.yaml or .agelclaw marker).
+    Falls back to ~/.agelclaw/ if not found."""
+    env_home = os.environ.get("AGELCLAW_HOME")
+    if env_home:
+        return Path(env_home).resolve()
+    d = Path(__file__).resolve().parent
+    for _ in range(10):
+        if (d / "config.yaml").exists() or (d / ".agelclaw").exists():
+            return d
+        d = d.parent
+    return Path.home() / ".agelclaw"
+
+
+PROJECT_DIR = _find_project_dir()
+DATA_DIR = PROJECT_DIR / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
 
 def _find_env():
     """Search parent directories for .env file."""
@@ -95,8 +114,8 @@ VAT_RATES = {
     8: Decimal("0"),
 }
 
-DEFAULT_DB_PATH = Path.home() / ".agelclaw" / "data" / "mydata_credentials.db"
-AFM_CACHE_DB = Path.home() / ".agelclaw" / "data" / "afm_cache.db"
+DEFAULT_DB_PATH = DATA_DIR / "mydata_credentials.db"
+AFM_CACHE_DB = DATA_DIR / "afm_cache.db"
 GSIS_WSDL = "https://www1.gsis.gr/wsaade/RgWsPublic2/RgWsPublic2?WSDL"
 
 
@@ -863,7 +882,7 @@ def _find_send_email_script() -> Optional[Path]:
         # Bundled in package data
         Path(__file__).resolve().parent.parent.parent / "src" / "agelclaw" / "data" / "skills" / "microsoft-graph-email" / "scripts" / "send_email.py",
         # Project skills dir
-        Path.home() / ".agelclaw" / ".Claude" / "Skills" / "microsoft-graph-email" / "scripts" / "send_email.py",
+        PROJECT_DIR / ".Claude" / "Skills" / "microsoft-graph-email" / "scripts" / "send_email.py",
         # User skills dir
         Path.home() / ".claude" / "skills" / "microsoft-graph-email" / "scripts" / "send_email.py",
     ]
@@ -885,6 +904,48 @@ def _find_send_email_script() -> Optional[Path]:
     return None
 
 
+def _enrich_supplier_names(invoices: list) -> int:
+    """Add issuer_name to expense invoices by looking up issuer VAT numbers.
+
+    Uses AFM cache (90 days) first, then AADE SOAP for uncached VATs.
+    Returns the number of successfully resolved names.
+    """
+    vat_set = set()
+    for inv in invoices:
+        vat = inv.get("issuer_vat", "").strip()
+        if vat and len(vat) == 9:
+            vat_set.add(vat)
+
+    if not vat_set:
+        return 0
+
+    name_map = {}
+    for vat in vat_set:
+        cached = _afm_cache.get(vat)
+        if cached:
+            name_map[vat] = cached.get("name", "")
+            continue
+        if _validate_afm(vat):
+            try:
+                info = _soap_lookup_afm(vat)
+                _afm_cache.put(vat, info)
+                name_map[vat] = info.get("name", "")
+            except Exception:
+                name_map[vat] = ""
+        else:
+            name_map[vat] = ""
+
+    resolved = 0
+    for inv in invoices:
+        vat = inv.get("issuer_vat", "").strip()
+        name = name_map.get(vat, "")
+        if name:
+            inv["issuer_name"] = name
+            resolved += 1
+
+    return resolved
+
+
 async def _daily_accounting_report(args: dict) -> str:
     """Fetch invoices, deduplicate, generate Excel, optionally email."""
     from accounting_xlsx import generate_xlsx
@@ -898,6 +959,7 @@ async def _daily_accounting_report(args: dict) -> str:
     date_to = args.get("date_to", today)
     send_email = args.get("send_email", True)
     email_to = args.get("email_to", "")
+    from_email = args.get("from_email", "") or cred_store.get_accounting_setting(afm, "email_sender", "")
 
     # Fetch invoices from AADE
     client = MyDataClient.from_db_or_env(afm)
@@ -938,8 +1000,15 @@ async def _daily_accounting_report(args: dict) -> str:
         result["message"] = "Δεν βρέθηκαν νέα παραστατικά για αυτή την περίοδο."
         return json.dumps(result, ensure_ascii=False, indent=2)
 
+    # Enrich expenses with supplier names (from cache/AADE SOAP)
+    try:
+        resolved = _enrich_supplier_names(new_received)
+        result["supplier_names_resolved"] = resolved
+    except Exception as e:
+        result["supplier_names_error"] = str(e)
+
     # Generate Excel
-    reports_dir = Path.home() / ".agelclaw" / "reports"
+    reports_dir = PROJECT_DIR / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
     filename = f"accounting_{afm}_{date_from}_{date_to}.xlsx"
     xlsx_path = reports_dir / filename
@@ -990,12 +1059,17 @@ async def _daily_accounting_report(args: dict) -> str:
                 )
                 try:
                     import asyncio as _aio
-                    proc = await _aio.create_subprocess_exec(
+                    cmd = [
                         sys.executable, str(script),
                         "--to", recipients,
                         "--subject", subject,
                         "--body", body,
                         "--attachment", str(xlsx_path),
+                    ]
+                    if from_email:
+                        cmd.extend(["--from", from_email])
+                    proc = await _aio.create_subprocess_exec(
+                        *cmd,
                         stdout=_aio.subprocess.PIPE,
                         stderr=_aio.subprocess.PIPE,
                     )
