@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from db import run_migrations, get_db
 from auth import get_current_user, register_user, login_user, get_member_role, require_role
 from config import PORT, FERNET, REPORTS_DIR
+from chat import router as chat_router
 
 
 @asynccontextmanager
@@ -28,6 +29,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(chat_router)
 
 
 # --- Pydantic models ---
