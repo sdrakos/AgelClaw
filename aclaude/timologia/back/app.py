@@ -54,6 +54,14 @@ class MemberReq(BaseModel):
     email: str
     role: str = "viewer"
 
+class ScheduleReq(BaseModel):
+    company_id: int
+    preset: str | None = None
+    params: dict | None = None
+    cron: str
+    recipients: str
+    enabled: bool = True
+
 
 # --- Auth endpoints ---
 @app.post("/api/auth/register")
@@ -417,6 +425,94 @@ async def download_report(report_id: int, user=Depends(get_current_user)):
         filename=file_path.name,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
+
+# --- Schedule endpoints ---
+
+@app.post("/api/reports/schedules")
+async def create_schedule(req: ScheduleReq, user=Depends(get_current_user)):
+    """Create a report schedule (requires accountant+ role)."""
+    require_role(user["id"], req.company_id, "accountant")
+
+    # Validate cron format
+    from jobs import _parse_cron
+    try:
+        _parse_cron(req.cron)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    params_json = json.dumps(req.params or {}, ensure_ascii=False)
+    with get_db() as conn:
+        cur = conn.execute(
+            """INSERT INTO report_schedules (company_id, created_by, preset, params, cron, recipients, enabled)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (req.company_id, user["id"], req.preset, params_json,
+             req.cron, req.recipients, 1 if req.enabled else 0),
+        )
+        schedule_id = cur.lastrowid
+    return {"id": schedule_id, "cron": req.cron, "enabled": req.enabled}
+
+
+@app.get("/api/reports/schedules")
+async def list_schedules(
+    company_id: int = Query(...),
+    user=Depends(get_current_user),
+):
+    """List report schedules for a company."""
+    role = get_member_role(user["id"], company_id)
+    if not role:
+        raise HTTPException(403, "Not a member of this company")
+
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM report_schedules WHERE company_id=? ORDER BY id DESC",
+            (company_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@app.put("/api/reports/schedules/{schedule_id}")
+async def update_schedule(schedule_id: int, req: ScheduleReq, user=Depends(get_current_user)):
+    """Update a report schedule (requires accountant+ role)."""
+    with get_db() as conn:
+        existing = conn.execute("SELECT * FROM report_schedules WHERE id=?", (schedule_id,)).fetchone()
+    if not existing:
+        raise HTTPException(404, "Schedule not found")
+
+    require_role(user["id"], existing["company_id"], "accountant")
+
+    # Validate cron format
+    from jobs import _parse_cron
+    try:
+        _parse_cron(req.cron)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    params_json = json.dumps(req.params or {}, ensure_ascii=False)
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE report_schedules
+               SET preset=?, params=?, cron=?, recipients=?, enabled=?
+               WHERE id=?""",
+            (req.preset, params_json, req.cron, req.recipients,
+             1 if req.enabled else 0, schedule_id),
+        )
+    return {"ok": True}
+
+
+@app.delete("/api/reports/schedules/{schedule_id}")
+async def delete_schedule(schedule_id: int, user=Depends(get_current_user)):
+    """Delete a report schedule (requires accountant+ role)."""
+    with get_db() as conn:
+        existing = conn.execute("SELECT * FROM report_schedules WHERE id=?", (schedule_id,)).fetchone()
+    if not existing:
+        raise HTTPException(404, "Schedule not found")
+
+    require_role(user["id"], existing["company_id"], "accountant")
+
+    with get_db() as conn:
+        conn.execute("DELETE FROM report_schedules WHERE id=?", (schedule_id,))
+    return {"ok": True}
 
 
 # --- Entry point ---
