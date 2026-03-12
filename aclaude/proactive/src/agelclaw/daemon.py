@@ -1710,17 +1710,23 @@ async def _maybe_run_heartbeat():
         "5. `agelclaw-mem log \"HEARTBEAT: <summary>\"`\n"
     )
 
+    # Heartbeat timeout: max 3 minutes (heartbeats should be quick checks)
+    HEARTBEAT_TIMEOUT = 180
+
     try:
         route = _router.route(task_type="heartbeat")
 
         if route.provider == Provider.OPENAI:
             agent = get_agent(provider="openai", model=route.model)
-            result = await agent.run(
-                prompt=heartbeat_prompt,
-                system_prompt=_get_daemon_prompt(),
-                tools=ALLOWED_TOOLS,
-                cwd=str(proactive_dir),
-                max_turns=10,
+            result = await asyncio.wait_for(
+                agent.run(
+                    prompt=heartbeat_prompt,
+                    system_prompt=_get_daemon_prompt(),
+                    tools=ALLOWED_TOOLS,
+                    cwd=str(proactive_dir),
+                    max_turns=10,
+                ),
+                timeout=HEARTBEAT_TIMEOUT,
             )
             log.info(f"HEARTBEAT completed (OpenAI): {(result or '')[:200]}")
         else:
@@ -1741,17 +1747,30 @@ async def _maybe_run_heartbeat():
             if mcp_configs:
                 options.mcp_servers = mcp_configs
 
-            response_parts = []
-            async for message in query(prompt=heartbeat_prompt, options=options):
-                if isinstance(message, AssistantMessage):
-                    for block in message.content:
-                        if isinstance(block, TextBlock):
-                            response_parts.append(block.text)
-            log.info(f"HEARTBEAT completed (Claude): {''.join(response_parts)[:200]}")
+            async def _run_heartbeat_claude():
+                response_parts = []
+                async for message in query(prompt=heartbeat_prompt, options=options):
+                    if isinstance(message, AssistantMessage):
+                        for block in message.content:
+                            if isinstance(block, TextBlock):
+                                response_parts.append(block.text)
+                return "".join(response_parts)
+
+            result = await asyncio.wait_for(
+                _run_heartbeat_claude(),
+                timeout=HEARTBEAT_TIMEOUT,
+            )
+            log.info(f"HEARTBEAT completed (Claude): {result[:200]}")
 
         # Only record timestamp AFTER successful execution
         memory.kv_set("last_heartbeat_at", datetime.now().isoformat())
 
+    except asyncio.TimeoutError:
+        log.error(f"HEARTBEAT timed out after {HEARTBEAT_TIMEOUT}s — killed")
+        # Don't retry too soon after a timeout
+        retry_at = datetime.now() - timedelta(hours=interval_hours) + timedelta(minutes=30)
+        memory.kv_set("last_heartbeat_at", retry_at.isoformat())
+        _cleanup_prompt_file("heartbeat")
     except Exception as e:
         log.error(f"HEARTBEAT failed: {e}", exc_info=True)
         # Set retry timestamp 15 minutes from now instead of full interval
@@ -1888,10 +1907,61 @@ def _cleanup_stale_tasks():
         log.error(f"Startup cleanup failed: {e}")
 
 
+def _recover_missed_tasks():
+    """Detect recurring tasks that were missed while daemon was down and trigger them.
+
+    When the daemon restarts after a crash, recurring tasks whose next_run_at
+    is in the past would normally just get rescheduled to the next slot without
+    ever executing. This function sets their next_run_at to now so the first
+    scheduler cycle picks them up and actually runs them.
+    """
+    try:
+        now = datetime.now()
+        with memory._conn() as conn:
+            missed = conn.execute(
+                "SELECT id, title, recurring_cron, next_run_at FROM tasks "
+                "WHERE status='pending' AND recurring_cron IS NOT NULL "
+                "AND recurring_cron != '' AND next_run_at IS NOT NULL "
+                "AND next_run_at <= ?",
+                (now.isoformat(),)
+            ).fetchall()
+
+        if not missed:
+            return
+
+        # Grace period: only recover tasks missed by more than 2 minutes
+        # (avoids double-run if daemon restarts right at the scheduled time)
+        GRACE_SECONDS = 120
+        recovered = []
+        for t in missed:
+            try:
+                due_at = datetime.fromisoformat(t["next_run_at"])
+                missed_by = (now - due_at).total_seconds()
+                if missed_by > GRACE_SECONDS:
+                    # Set next_run_at to now so it gets picked up immediately
+                    memory.update_task(t["id"], next_run_at=now.isoformat())
+                    recovered.append(t)
+                    log.warning(
+                        f"Missed task recovery: Task #{t['id']} '{t['title']}' "
+                        f"(cron: {t['recurring_cron']}) was due at {t['next_run_at']}, "
+                        f"missed by {missed_by:.0f}s — scheduling for immediate execution"
+                    )
+            except (ValueError, TypeError) as e:
+                log.error(f"Missed task recovery: bad date for task #{t['id']}: {e}")
+
+        if recovered:
+            log.info(f"Missed task recovery: {len(recovered)} task(s) will run immediately")
+    except Exception as e:
+        log.error(f"Missed task recovery failed: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Clean up stale tasks from previous crash
     _cleanup_stale_tasks()
+
+    # Recover recurring tasks that were missed while daemon was down
+    _recover_missed_tasks()
 
     # Start the scheduler and watchdog as background tasks
     scheduler_task = asyncio.create_task(scheduler_loop())
@@ -2230,6 +2300,15 @@ async def events():
 async def run_daemon():
     """Entry point for `agelclaw daemon` CLI command."""
     import uvicorn as _uv
+    # Remove Claude Code env vars — prevents "nested session" error when daemon
+    # is started from a Claude Code terminal. Without this, claude.exe refuses
+    # to launch subagent queries (exit code 1 immediately).
+    # Must remove ALL Claude Code indicators, not just CLAUDECODE.
+    for _cc_var in [
+        "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION",
+        "CLAUDE_CODE_TASK_ID", "CLAUDE_CODE_CONVERSATION_ID",
+    ]:
+        os.environ.pop(_cc_var, None)
     os.environ.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "0")
     memory.kv_set("daemon_last_start", datetime.now().isoformat())
     memory.kv_set("daemon_status", "running")
@@ -2248,18 +2327,3 @@ async def run_daemon():
 if __name__ == "__main__":
     import asyncio as _asyncio
     _asyncio.run(run_daemon())
-    # Remove output token limit — let Claude produce as much as needed
-    os.environ.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "0")
-
-    memory.kv_set("daemon_last_start", datetime.now().isoformat())
-    memory.kv_set("daemon_status", "running")
-
-    log.info("Agent Daemon v2 starting (parallel execution)")
-    log.info(f"   API: http://localhost:{API_PORT}")
-    log.info(f"   Interval: {CHECK_INTERVAL}s")
-    log.info(f"   Max concurrent: {MAX_CONCURRENT_TASKS}")
-    log.info(f"   Max tasks/cycle: {MAX_TASKS_PER_CYCLE}")
-    log.info(f"   Database: {memory.db_path}")
-    log.info(f"   Output token limit: {os.environ.get('CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'default')}")
-
-    uvicorn.run(app, host="0.0.0.0", port=API_PORT, log_level="info")

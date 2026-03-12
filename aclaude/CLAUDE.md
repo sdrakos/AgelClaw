@@ -11,6 +11,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - New config keys → update "Configuration"
 - Architecture changes → update "Architecture"
 
+**Note:** The parent `AGENTI_SDK/CLAUDE.md` is a lightweight pointer to this file. This is the authoritative reference.
+
 ## What This Is
 
 **AgelClaw v3.1.0** — a self-evolving autonomous assistant with multi-provider support (Claude + OpenAI), persistent memory, skills, and subagents.
@@ -256,6 +258,10 @@ proactive/src/agelclaw/           # Python package (pip install)
 
 **Stale task cleanup on startup.** When the daemon starts, `_cleanup_stale_tasks()` queries for any tasks stuck in `in_progress` (from a previous crash) and resets them to `pending`. This prevents tasks from being permanently stuck after a daemon restart.
 
+**Missed task recovery on startup.** `_recover_missed_tasks()` runs after stale cleanup in daemon lifespan. Detects recurring tasks with `next_run_at` in the past (missed while daemon was down) and sets their `next_run_at` to now so the first scheduler cycle executes them immediately. Has a 2-minute grace period to avoid double-runs when daemon restarts right at the scheduled time. Without this, missed `daily_12:00` tasks would silently reschedule to tomorrow.
+
+**Heartbeat timeout protection.** `_maybe_run_heartbeat()` wraps both OpenAI and Claude agent calls in `asyncio.wait_for(timeout=180)`. Previously, the heartbeat had no timeout — if the agent hung (e.g., SDK initialization timeout on Windows), it blocked the entire scheduler loop indefinitely. On timeout, the heartbeat is killed and retries in 30 minutes. Regular tasks already had timeout protection via `_stream_global_task()`.
+
 **Auto-retry for failed tasks.** Subagents can specify `max_retries` in SUBAGENT.md frontmatter (default 0). When a task fails (timeout or exception) and retries remain, the daemon resets it to `pending` with incremented `retry_count` in task metadata, then wakes the scheduler. Telegram notification includes retry status.
 
 **Tool hallucination guard.** System prompt explicitly lists the ONLY available tools and warns against using non-existent tools (e.g. `TodoWrite`, `Task`, `TodoRead`) which cause the agent to freeze waiting for a response that never comes. The `task_prompt` in `execute_subagent_task()` includes a TOOL GUARD section listing all forbidden tools.
@@ -307,6 +313,8 @@ proactive/src/agelclaw/           # Python package (pip install)
 **Auto-start daemon on Windows login.** `project.py`'s `init_project()` calls `_install_startup_script()` on Windows, which creates `agelclaw_daemon.bat` in `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\`. The bat file `cd`s to the project directory and runs `start /min agelclaw daemon`. Only created once — skipped if the file already exists. Non-critical: failure doesn't block init.
 
 **Port-aware service startup.** `agent_run.py` (dev runner) checks if a service's port is already in use before starting it. If the daemon is already running on `:8420` or the API server on `:8000`, it skips that service instead of crashing with `Address already in use`.
+
+**CLAUDECODE env var cleanup.** Both `agent_run.py` and `daemon.py`'s `run_daemon()` call `os.environ.pop("CLAUDECODE", None)` at startup. Claude Code sets `CLAUDECODE=1` in its terminal environment; child processes inherit it. `claude.exe` v2.1.71+ checks for this var and refuses to launch ("nested session" error, exit code 1 immediately). Without the pop, any daemon or subagent started from a Claude Code terminal fails silently. The daemon also removes `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION`, `CLAUDE_CODE_TASK_ID`, and `CLAUDE_CODE_CONVERSATION_ID`.
 
 ## Configuration (config.yaml)
 
