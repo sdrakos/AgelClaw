@@ -225,8 +225,8 @@ async def get_analytics(
         key=lambda x: x["gross"], reverse=True,
     )[:10]
 
-    # ── Avg invoice by month (last 12 months, sent) ──
-    avg_invoice_by_month = []
+    # ── Avg invoice by month (last 12 months, sent, skip leading empty) ──
+    all_avg = []
     for i in range(11, -1, -1):
         m = today.month - i
         y = today.year
@@ -234,15 +234,24 @@ async def get_analytics(
             m += 12
             y -= 1
         mk = f"{y}-{m:02d}"
+        label = f"{GREEK_MONTHS[m - 1]} {y % 100:02d}"
         entry = monthly_sent_totals.get(mk)
         if entry and entry["count"] > 0:
-            avg_invoice_by_month.append({
-                "month": mk,
+            all_avg.append({
+                "month": label,
                 "avg": round(entry["total"] / entry["count"], 2),
                 "count": entry["count"],
             })
         else:
-            avg_invoice_by_month.append({"month": mk, "avg": 0.0, "count": 0})
+            all_avg.append({"month": label, "avg": 0.0, "count": 0})
+
+    avg_invoice_by_month = []
+    data_started = False
+    for entry in all_avg:
+        if not data_started and entry["count"] == 0:
+            continue
+        data_started = True
+        avg_invoice_by_month.append(entry)
 
     # ── Month forecast (sent only) ──
     days_elapsed = today.day
@@ -283,8 +292,8 @@ async def get_analytics(
             "avg_revenue": round(avg_rev, 2),
         })
 
-    # ── Monthly evolution (last 12 months) ──
-    monthly_evolution = []
+    # ── Monthly evolution (last 12 months, skip leading empty months) ──
+    all_months = []
     for i in range(11, -1, -1):
         m = today.month - i
         y = today.year
@@ -292,11 +301,21 @@ async def get_analytics(
             m += 12
             y -= 1
         mk = f"{y}-{m:02d}"
-        monthly_evolution.append({
-            "month": mk,
+        label = f"{GREEK_MONTHS[m - 1]} {y % 100:02d}"
+        all_months.append({
+            "month": label,
             "income": round(monthly_income.get(mk, 0.0), 2),
             "expenses": round(monthly_expense.get(mk, 0.0), 2),
         })
+
+    # Trim leading zero months (before first month with data)
+    monthly_evolution = []
+    data_started = False
+    for entry in all_months:
+        if not data_started and entry["income"] == 0 and entry["expenses"] == 0:
+            continue
+        data_started = True
+        monthly_evolution.append(entry)
 
     # ── Round period comparison values ──
     def _round_period(p):

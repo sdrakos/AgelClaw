@@ -9,8 +9,8 @@ from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 from db import run_migrations, get_db
-from auth import get_current_user, register_user, login_user, get_member_role, require_role
-from config import PORT, FERNET, REPORTS_DIR
+from auth import get_current_user, register_user, login_user, get_member_role, require_role, hash_password
+from config import PORT, FERNET, REPORTS_DIR, APP_URL
 from chat import router as chat_router
 from analytics import router as analytics_router
 
@@ -45,6 +45,13 @@ class LoginReq(BaseModel):
     email: str
     password: str
 
+class ForgotPasswordReq(BaseModel):
+    email: str
+
+class ResetPasswordReq(BaseModel):
+    token: str
+    password: str
+
 class CompanyReq(BaseModel):
     name: str
     afm: str
@@ -77,6 +84,90 @@ def api_login(req: LoginReq):
 @app.get("/api/auth/me")
 async def api_me(user=Depends(get_current_user)):
     return user
+
+
+@app.post("/api/auth/forgot-password")
+def api_forgot_password(req: ForgotPasswordReq):
+    """Send password reset email. Always returns success (no user enumeration)."""
+    import secrets
+    email = req.email.strip().lower()
+
+    with get_db() as conn:
+        user = conn.execute("SELECT id, name FROM users WHERE email=?", (email,)).fetchone()
+
+    if not user:
+        # Don't reveal if email exists
+        return {"ok": True}
+
+    token = secrets.token_urlsafe(32)
+    expires_at = (datetime.now() + timedelta(hours=1)).isoformat()
+
+    with get_db() as conn:
+        # Invalidate old tokens
+        conn.execute("DELETE FROM password_resets WHERE user_id=?", (user["id"],))
+        conn.execute(
+            "INSERT INTO password_resets (user_id, token, expires_at) VALUES (?, ?, ?)",
+            (user["id"], token, expires_at),
+        )
+
+    reset_url = f"{APP_URL}/reset-password/{token}"
+    user_name = user["name"] or email
+
+    html_body = f"""
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 520px; margin: 0 auto; padding: 32px;">
+      <div style="text-align: center; margin-bottom: 24px;">
+        <div style="display: inline-block; background: #4f46e5; color: white; width: 40px; height: 40px; border-radius: 10px; line-height: 40px; font-weight: bold; font-size: 18px;">T</div>
+        <span style="font-size: 20px; font-weight: 600; color: #1e293b; margin-left: 8px; vertical-align: middle;">Timologia</span>
+      </div>
+      <h2 style="color: #1e293b; margin: 0 0 8px;">Αλλαγή κωδικού</h2>
+      <p style="color: #475569; font-size: 15px;">
+        Γεια σας {user_name}, λάβαμε αίτημα αλλαγής κωδικού για τον λογαριασμό σας.
+      </p>
+      <div style="text-align: center; margin: 28px 0;">
+        <a href="{reset_url}" style="display: inline-block; background: #4f46e5; color: white; text-decoration: none; padding: 12px 32px; border-radius: 8px; font-weight: 600; font-size: 15px;">
+          Αλλαγή Κωδικού
+        </a>
+      </div>
+      <p style="color: #94a3b8; font-size: 13px;">Ο σύνδεσμος λήγει σε 1 ώρα. Αν δεν ζητήσατε αλλαγή κωδικού, αγνοήστε αυτό το email.</p>
+      <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;">
+      <p style="color: #cbd5e1; font-size: 12px; text-align: center;">Timologia — Powered by <b>Agel AI</b></p>
+    </div>
+    """
+
+    try:
+        from email_sender import send_email
+        send_email([email], "Αλλαγή κωδικού — Timologia", html_body)
+    except Exception as e:
+        print(f"[WARN] Password reset email failed for {email}: {e}")
+
+    return {"ok": True}
+
+
+@app.post("/api/auth/reset-password")
+def api_reset_password(req: ResetPasswordReq):
+    """Reset password using a valid reset token."""
+    with get_db() as conn:
+        reset = conn.execute(
+            "SELECT * FROM password_resets WHERE token=? AND used=0", (req.token,)
+        ).fetchone()
+
+    if not reset:
+        raise HTTPException(400, "Μη έγκυρος σύνδεσμος αλλαγής κωδικού")
+
+    if datetime.fromisoformat(reset["expires_at"]) < datetime.now():
+        raise HTTPException(410, "Ο σύνδεσμος έχει λήξει. Ζητήστε νέο.")
+
+    if len(req.password) < 6:
+        raise HTTPException(400, "Ο κωδικός πρέπει να έχει τουλάχιστον 6 χαρακτήρες")
+
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE users SET password_hash=? WHERE id=?",
+            (hash_password(req.password), reset["user_id"]),
+        )
+        conn.execute("UPDATE password_resets SET used=1 WHERE id=?", (reset["id"],))
+
+    return {"ok": True}
 
 
 # --- Company endpoints ---
@@ -144,17 +235,77 @@ async def list_members(company_id: int, user=Depends(get_current_user)):
     return [dict(r) for r in rows]
 
 @app.post("/api/companies/{company_id}/members")
-async def add_member(company_id: int, req: MemberReq, user=Depends(get_current_user)):
+async def invite_member(company_id: int, req: MemberReq, user=Depends(get_current_user)):
     require_role(user["id"], company_id, "owner")
+    import secrets
+
+    email = req.email.strip().lower()
+    token = secrets.token_urlsafe(32)
+    expires_at = (datetime.now() + timedelta(days=7)).isoformat()
+
     with get_db() as conn:
-        target = conn.execute("SELECT id FROM users WHERE email=?", (req.email,)).fetchone()
-        if not target:
-            raise HTTPException(404, "User not found")
+        # Check if already a member
+        existing_user = conn.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
+        if existing_user:
+            existing_member = conn.execute(
+                "SELECT id FROM company_members WHERE user_id=? AND company_id=?",
+                (existing_user["id"], company_id),
+            ).fetchone()
+            if existing_member:
+                raise HTTPException(409, "Ο χρήστης είναι ήδη μέλος")
+
+        # Check for pending invitation
+        pending = conn.execute(
+            "SELECT id FROM invitations WHERE email=? AND company_id=? AND status='pending'",
+            (email, company_id),
+        ).fetchone()
+        if pending:
+            raise HTTPException(409, "Υπάρχει ήδη εκκρεμής πρόσκληση")
+
+        # Get company name for the email
+        company = conn.execute("SELECT name FROM companies WHERE id=?", (company_id,)).fetchone()
+        company_name = company["name"] if company else "εταιρεία"
+
         conn.execute(
-            "INSERT OR REPLACE INTO company_members (user_id, company_id, role) VALUES (?, ?, ?)",
-            (target["id"], company_id, req.role),
+            "INSERT INTO invitations (company_id, invited_by, email, role, token, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (company_id, user["id"], email, req.role, token, expires_at),
         )
-    return {"ok": True}
+
+    # Send invitation email
+    invite_url = f"{APP_URL}/invite/{token}"
+    inviter_name = user.get("name") or user.get("email")
+    role_labels = {"viewer": "Αναγνώστης", "accountant": "Λογιστής", "owner": "Διαχειριστής"}
+    role_label = role_labels.get(req.role, req.role)
+
+    html_body = f"""
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 520px; margin: 0 auto; padding: 32px;">
+      <div style="text-align: center; margin-bottom: 24px;">
+        <div style="display: inline-block; background: #4f46e5; color: white; width: 40px; height: 40px; border-radius: 10px; line-height: 40px; font-weight: bold; font-size: 18px;">T</div>
+        <span style="font-size: 20px; font-weight: 600; color: #1e293b; margin-left: 8px; vertical-align: middle;">Timologia</span>
+      </div>
+      <h2 style="color: #1e293b; margin: 0 0 8px;">Πρόσκληση σε εταιρεία</h2>
+      <p style="color: #475569; font-size: 15px;">
+        Ο/Η <b>{inviter_name}</b> σας προσκαλεί στην εταιρεία <b>{company_name}</b> με ρόλο <b>{role_label}</b>.
+      </p>
+      <div style="text-align: center; margin: 28px 0;">
+        <a href="{invite_url}" style="display: inline-block; background: #4f46e5; color: white; text-decoration: none; padding: 12px 32px; border-radius: 8px; font-weight: 600; font-size: 15px;">
+          Αποδοχή Πρόσκλησης
+        </a>
+      </div>
+      <p style="color: #94a3b8; font-size: 13px;">Η πρόσκληση λήγει σε 7 ημέρες. Αν δεν έχετε λογαριασμό, θα μπορέσετε να δημιουργήσετε έναν.</p>
+      <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;">
+      <p style="color: #cbd5e1; font-size: 12px; text-align: center;">Timologia — Powered by <b>Agel AI</b></p>
+    </div>
+    """
+
+    try:
+        from email_sender import send_email
+        send_email([email], f"Πρόσκληση στην εταιρεία {company_name} — Timologia", html_body)
+    except Exception as e:
+        # Email failed but invitation is created — log but don't fail
+        print(f"[WARN] Invitation email failed for {email}: {e}")
+
+    return {"ok": True, "message": f"Πρόσκληση στάλθηκε στο {email}"}
 
 @app.delete("/api/companies/{company_id}/members/{uid}")
 async def remove_member(company_id: int, uid: int, user=Depends(get_current_user)):
@@ -163,6 +314,126 @@ async def remove_member(company_id: int, uid: int, user=Depends(get_current_user
         conn.execute(
             "DELETE FROM company_members WHERE user_id=? AND company_id=?", (uid, company_id)
         )
+    return {"ok": True}
+
+
+# --- Invitation endpoints ---
+
+@app.get("/api/invite/{token}")
+async def get_invitation_info(token: str):
+    """Public endpoint — returns invitation details (no auth required)."""
+    with get_db() as conn:
+        inv = conn.execute(
+            """SELECT i.*, c.name as company_name, u.name as inviter_name, u.email as inviter_email
+               FROM invitations i
+               JOIN companies c ON c.id = i.company_id
+               JOIN users u ON u.id = i.invited_by
+               WHERE i.token = ?""",
+            (token,),
+        ).fetchone()
+
+    if not inv:
+        raise HTTPException(404, "Η πρόσκληση δεν βρέθηκε")
+
+    if inv["status"] != "pending":
+        raise HTTPException(410, "Η πρόσκληση έχει ήδη χρησιμοποιηθεί")
+
+    if datetime.fromisoformat(inv["expires_at"]) < datetime.now():
+        raise HTTPException(410, "Η πρόσκληση έχει λήξει")
+
+    # Check if invited email already has an account
+    with get_db() as conn:
+        existing = conn.execute("SELECT id FROM users WHERE email=?", (inv["email"],)).fetchone()
+
+    return {
+        "email": inv["email"],
+        "role": inv["role"],
+        "company_name": inv["company_name"],
+        "inviter_name": inv["inviter_name"] or inv["inviter_email"],
+        "has_account": existing is not None,
+    }
+
+
+@app.post("/api/invite/{token}/accept")
+async def accept_invitation(token: str, request: Request):
+    """Accept invitation — login (existing user) or register (new user)."""
+    body = await request.json()
+
+    with get_db() as conn:
+        inv = conn.execute(
+            "SELECT * FROM invitations WHERE token=? AND status='pending'", (token,)
+        ).fetchone()
+
+    if not inv:
+        raise HTTPException(404, "Η πρόσκληση δεν βρέθηκε ή έχει χρησιμοποιηθεί")
+
+    if datetime.fromisoformat(inv["expires_at"]) < datetime.now():
+        raise HTTPException(410, "Η πρόσκληση έχει λήξει")
+
+    email = inv["email"]
+
+    with get_db() as conn:
+        existing = conn.execute(
+            "SELECT id, email, name, role, password_hash FROM users WHERE email=?", (email,)
+        ).fetchone()
+
+    if existing:
+        # Existing user — verify password
+        password = body.get("password", "")
+        if not password:
+            raise HTTPException(400, "Απαιτείται κωδικός")
+        from auth import verify_password, create_token
+        if not verify_password(password, existing["password_hash"]):
+            raise HTTPException(401, "Λάθος κωδικός")
+        user_id = existing["id"]
+        user_data = {"id": existing["id"], "email": existing["email"], "name": existing["name"], "role": existing["role"]}
+        tok = create_token(user_id, existing["role"])
+    else:
+        # New user — register
+        password = body.get("password", "")
+        name = body.get("name", "")
+        if not password or not name:
+            raise HTTPException(400, "Απαιτείται όνομα και κωδικός")
+        from auth import register_user
+        result = register_user(email, password, name)
+        user_id = result["user"]["id"]
+        user_data = result["user"]
+        tok = result["token"]
+
+    # Add to company_members + mark invitation as accepted
+    with get_db() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO company_members (user_id, company_id, role) VALUES (?, ?, ?)",
+            (user_id, inv["company_id"], inv["role"]),
+        )
+        conn.execute(
+            "UPDATE invitations SET status='accepted' WHERE id=?", (inv["id"],)
+        )
+
+    return {"token": tok, "user": user_data}
+
+
+@app.get("/api/companies/{company_id}/invitations")
+async def list_invitations(company_id: int, user=Depends(get_current_user)):
+    """List pending invitations for a company."""
+    require_role(user["id"], company_id, "owner")
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, email, role, status, created_at, expires_at FROM invitations WHERE company_id=? ORDER BY id DESC",
+            (company_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@app.delete("/api/invitations/{invitation_id}")
+async def cancel_invitation(invitation_id: int, user=Depends(get_current_user)):
+    """Cancel a pending invitation."""
+    with get_db() as conn:
+        inv = conn.execute("SELECT * FROM invitations WHERE id=?", (invitation_id,)).fetchone()
+        if not inv:
+            raise HTTPException(404, "Πρόσκληση δεν βρέθηκε")
+        require_role(user["id"], inv["company_id"], "owner")
+        conn.execute("DELETE FROM invitations WHERE id=?", (invitation_id,))
     return {"ok": True}
 
 
@@ -211,7 +482,8 @@ async def _sync_invoices(company_id: int, force: bool = False):
     from aade_client import MyDataClient
     client = MyDataClient(aade_uid, aade_key, company["afm"], env=company["aade_env"])
 
-    date_from = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+    # Sync from start of previous year to capture full history
+    date_from = datetime(datetime.now().year - 1, 1, 1).strftime("%Y-%m-%d")
     date_to = datetime.now().strftime("%Y-%m-%d")
 
     try:

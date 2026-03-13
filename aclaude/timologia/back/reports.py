@@ -88,9 +88,11 @@ def get_preset_dates(preset: str, params: dict) -> tuple[str, str]:
             return _resolve_relative_period(period, today)
         df = params.get("date_from")
         dt = params.get("date_to")
-        if not df or not dt:
-            raise ValueError("Custom preset requires date_from and date_to in params")
-        return df, dt
+        if df and dt:
+            return df, dt
+        # Fallback: current year (for schedules created without params)
+        first = today.replace(month=1, day=1)
+        return first.isoformat(), today.isoformat()
 
     else:
         raise ValueError(f"Unknown preset: {preset}")

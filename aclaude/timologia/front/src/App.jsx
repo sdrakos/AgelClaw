@@ -8,6 +8,9 @@ import Invoices from './pages/Invoices'
 import Reports from './pages/Reports'
 import Analytics from './pages/Analytics'
 import Settings from './pages/Settings'
+import Help from './pages/Help'
+import AcceptInvite from './pages/AcceptInvite'
+import ResetPassword from './pages/ResetPassword'
 
 function ProtectedRoute({ children }) {
   return isAuthenticated() ? children : <Navigate to="/login" />
@@ -18,6 +21,8 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/invite/:token" element={<AcceptInvite />} />
+        <Route path="/reset-password/:token" element={<ResetPassword />} />
         <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
           <Route index element={<Dashboard />} />
           <Route path="chat" element={<Chat />} />
@@ -25,6 +30,7 @@ export default function App() {
           <Route path="analytics" element={<Analytics />} />
           <Route path="reports" element={<Reports />} />
           <Route path="settings" element={<Settings />} />
+          <Route path="help" element={<Help />} />
         </Route>
       </Routes>
     </BrowserRouter>

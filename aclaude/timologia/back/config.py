@@ -38,3 +38,4 @@ OUTLOOK_USER_EMAIL = os.environ.get("OUTLOOK_USER_EMAIL", "")
 
 DB_PATH = BASE_DIR / "data" / "timologia.db"
 REPORTS_DIR = BASE_DIR / "data" / "reports"
+APP_URL = os.environ.get("APP_URL", "http://localhost:5173")
