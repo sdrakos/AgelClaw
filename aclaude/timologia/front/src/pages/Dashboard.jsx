@@ -190,6 +190,7 @@ export default function Dashboard() {
             Δεν βρέθηκαν παραστατικά
           </div>
         ) : (
+          <>
           {/* Mobile card view */}
           <div className="block sm:hidden divide-y divide-gray-100">
             {invoices.map((inv) => (
@@ -261,6 +262,7 @@ export default function Dashboard() {
               </tbody>
             </table>
           </div>
+          </>
         )}
       </div>
     </div>

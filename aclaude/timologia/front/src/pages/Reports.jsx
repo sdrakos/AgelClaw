@@ -490,6 +490,7 @@ export default function Reports() {
               Δεν υπάρχουν προγραμματισμένες αναφορές
             </div>
           ) : (
+            <>
             {/* Mobile card view */}
             <div className="block sm:hidden divide-y divide-gray-100">
               {schedules.map((s) => {
@@ -600,6 +601,7 @@ export default function Reports() {
                 </tbody>
               </table>
             </div>
+            </>
           )}
         </div>
       </div>
