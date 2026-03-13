@@ -196,6 +196,9 @@ async def create_company(req: CompanyReq, user=Depends(get_current_user)):
     encrypted_uid = FERNET.encrypt(req.aade_user_id.encode()).decode() if req.aade_user_id else ""
     encrypted_key = FERNET.encrypt(req.aade_subscription_key.encode()).decode() if req.aade_subscription_key else ""
     with get_db() as conn:
+        existing = conn.execute("SELECT id FROM companies WHERE afm = ?", (req.afm,)).fetchone()
+        if existing:
+            raise HTTPException(400, "Υπάρχει ήδη εταιρεία με αυτό το ΑΦΜ")
         cur = conn.execute(
             "INSERT INTO companies (name, afm, aade_user_id, aade_subscription_key, aade_env) "
             "VALUES (?, ?, ?, ?, ?)",

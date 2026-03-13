@@ -53,7 +53,7 @@ export default function AcceptInvite() {
 
       // Auto-login
       setAuth(data.token, data.user)
-      navigate('/')
+      navigate('/app')
     } catch {
       setFormError('Σφάλμα αποδοχής πρόσκλησης')
     } finally {

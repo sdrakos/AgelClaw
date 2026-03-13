@@ -37,7 +37,7 @@ export default function Login() {
       }
 
       setAuth(data.token, data.user)
-      navigate('/')
+      navigate('/app')
     } catch {
       setError('Σφάλμα σύνδεσης. Δοκιμάστε ξανά.')
     } finally {

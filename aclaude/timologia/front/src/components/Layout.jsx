@@ -5,13 +5,13 @@ import { CompanyProvider } from '../context/CompanyContext'
 import CompanySelector from './CompanySelector'
 
 const NAV_ITEMS = [
-  { to: '/', label: 'Αρχική', icon: HomeIcon, end: true },
-  { to: '/chat', label: 'Chat', icon: ChatIcon },
-  { to: '/invoices', label: 'Παραστατικά', icon: InvoiceIcon },
-  { to: '/analytics', label: 'Στατιστικά', icon: AnalyticsIcon },
-  { to: '/reports', label: 'Αναφορές', icon: ReportIcon },
-  { to: '/settings', label: 'Ρυθμίσεις', icon: SettingsIcon },
-  { to: '/help', label: 'Βοήθεια', icon: HelpIcon },
+  { to: '/app', label: 'Αρχική', icon: HomeIcon, end: true },
+  { to: '/app/chat', label: 'Chat', icon: ChatIcon },
+  { to: '/app/invoices', label: 'Παραστατικά', icon: InvoiceIcon },
+  { to: '/app/analytics', label: 'Στατιστικά', icon: AnalyticsIcon },
+  { to: '/app/reports', label: 'Αναφορές', icon: ReportIcon },
+  { to: '/app/settings', label: 'Ρυθμίσεις', icon: SettingsIcon },
+  { to: '/app/help', label: 'Βοήθεια', icon: HelpIcon },
 ]
 
 export default function Layout() {

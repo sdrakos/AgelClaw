@@ -369,14 +369,14 @@ timologia/
 │   ├── email_sender.py           # Microsoft Graph email
 │   ├── jobs.py                   # Cron parser + RQ job runner
 │   ├── worker.py                 # RQ worker + scheduler loop
-│   ├── migrations/001_init.sql   # 8 tables
+│   ├── migrations/001_init.sql   # 8 tables + 003_password_resets.sql
 │   ├── data/timologia.db         # SQLite database (auto-created)
 │   ├── .env                      # Credentials (JWT_SECRET, FERNET_KEY, OPENAI_API_KEY, etc.)
 │   └── requirements.txt
 ├── front/
 │   ├── src/
-│   │   ├── App.jsx               # Routes + ProtectedRoute
-│   │   ├── pages/                # Login, Dashboard, Chat, Invoices, Analytics, Reports, Settings
+│   │   ├── App.jsx               # Routes: / (Landing), /login, /app/* (protected)
+│   │   ├── pages/                # Landing, Login, Dashboard, Chat, Invoices, Analytics, Reports, Settings, Help, AcceptInvite, ResetPassword
 │   │   ├── components/           # Layout, ChatPanel, ToolActivity, ConfirmationCard, CompanySelector, InvoiceTable
 │   │   ├── context/CompanyContext.jsx
 │   │   └── lib/                  # api.js (fetch + SSE), auth.js (JWT localStorage)
@@ -411,6 +411,16 @@ timologia/
 **AADE 429 rate limit retry.** `aade_client.py` retries up to 4 times on HTTP 429 responses, parsing "Try again in N seconds" from the JSON error message. Both `_get` and `_post` methods have retry logic.
 
 **Register auto-login.** `register_user()` returns `{token, user}` (same format as login) so frontend auto-logs in after registration.
+
+**Landing page.** Public marketing page at `/` (`Landing.jsx`) — hero with app mockup, 6 feature cards, 3-step onboarding, AI chat demo, security section, CTA. Authenticated users auto-redirect to `/app`. All app routes moved from `/` to `/app/*`.
+
+**Password reset flow.** `POST /api/auth/forgot-password` generates token (1h expiry), sends HTML email via Microsoft Graph. `POST /api/auth/reset-password` validates token, updates password. `ResetPassword.jsx` at `/reset-password/:token`. Always returns `{ok: true}` on forgot-password to prevent user enumeration.
+
+**Help page.** `Help.jsx` at `/app/help` — myDATA guide with 3 screenshots (from `/help/mydata1-3.png`), setup instructions, 7 FAQ items. Screenshot 3 has CSS `backdrop-filter: blur(20px)` overlays for personal data privacy.
+
+**Duplicate AFM guard.** `create_company()` checks for existing AFM before INSERT — returns 400 "Υπάρχει ήδη εταιρεία με αυτό το ΑΦΜ" instead of crashing with 500 IntegrityError.
+
+**Invoice sync window.** `_sync_invoices()` fetches from Jan 1 of previous year (not last 90 days) to capture full history.
 
 **Analytics dashboard.** `analytics.py` provides `GET /api/analytics?company_id=X` — fetches all invoices once, aggregates in Python. Returns 10 sections: period_comparison (month/week/YoY), daily_revenue (30 days), vat_breakdown (pie), top_suppliers, top_customers, avg_invoice_by_month, month_forecast (linear projection), seasonality, weekday_revenue, monthly_evolution. Frontend uses Recharts (+ `react-is` peer dep). Route: `/analytics`.
 
