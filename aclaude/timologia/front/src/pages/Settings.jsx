@@ -150,7 +150,7 @@ export default function Settings() {
       <h1 className="text-2xl font-bold text-slate-800">Ρυθμίσεις</h1>
 
       {/* Tabs */}
-      <div className="flex gap-1 rounded-lg bg-gray-100 p-1 w-fit">
+      <div className="flex gap-1 rounded-lg bg-gray-100 p-1 w-full sm:w-fit overflow-x-auto">
         {TABS.map((t) => (
           <button
             key={t.key}
@@ -186,7 +186,7 @@ export default function Settings() {
 
       {/* ═══ Company tab ═══ */}
       {tab === 'company' && (
-        <form onSubmit={saveCompany} className="rounded-xl bg-white p-6 shadow-sm space-y-5 max-w-xl">
+        <form onSubmit={saveCompany} className="rounded-xl bg-white p-4 sm:p-6 shadow-sm space-y-5 max-w-xl">
           {loading ? (
             <div className="flex h-32 items-center justify-center text-gray-400">Φόρτωση...</div>
           ) : (
@@ -251,13 +251,13 @@ export default function Settings() {
 
       {/* ═══ Members tab ═══ */}
       {tab === 'members' && (
-        <div className="space-y-5 max-w-3xl">
+        <div className="space-y-5">
 
           {/* Invite form */}
           <div className="rounded-xl bg-white p-5 shadow-sm">
             <h3 className="mb-1 text-sm font-semibold text-slate-800">Πρόσκληση Νέου Μέλους</h3>
             <p className="mb-4 text-xs text-slate-400">Θα σταλεί email πρόσκληση. Αν δεν έχει λογαριασμό, θα δημιουργήσει κατά την αποδοχή.</p>
-            <form onSubmit={inviteMember} className="flex flex-wrap items-end gap-3">
+            <form onSubmit={inviteMember} className="flex flex-col sm:flex-row sm:flex-wrap sm:items-end gap-3">
               <div className="flex-1 min-w-[220px]">
                 <label className="mb-1 block text-xs font-medium text-slate-500">Email</label>
                 <input type="email" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)}

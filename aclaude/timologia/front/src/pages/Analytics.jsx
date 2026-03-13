@@ -190,7 +190,7 @@ export default function Analytics() {
         </div>
       </Card>
 
-      <div className="grid gap-6 md:grid-cols-2">
+      <div className="grid gap-6 grid-cols-1 md:grid-cols-2">
         {/* 3. Daily Revenue */}
         <Card title="Μεσος Ημερησιος Τζιρος">
           <ResponsiveContainer width="100%" height={280}>
@@ -217,7 +217,7 @@ export default function Analytics() {
                 cx="50%"
                 cy="50%"
                 outerRadius={100}
-                label={({ rate, net }) => `${rate}% - ${fmt(net)}`}
+                label={({ rate }) => `${rate}`}
               >
                 {vatBreak.map((_, i) => (
                   <Cell key={i} fill={VAT_COLORS[i % VAT_COLORS.length]} />
@@ -306,7 +306,7 @@ export default function Analytics() {
         </ResponsiveContainer>
       </Card>
 
-      <div className="grid gap-6 md:grid-cols-2">
+      <div className="grid gap-6 grid-cols-1 md:grid-cols-2">
         {/* 8. Average Invoice Value */}
         <Card title="Μεση Αξια Παραστατικου">
           <ResponsiveContainer width="100%" height={280}>

@@ -159,7 +159,7 @@ export default function Dashboard() {
       <h1 className="text-2xl font-bold text-slate-800">Αρχική</h1>
 
       {/* Stat cards */}
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
         {STAT_CARDS.map((card) => (
           <div key={card.label} className="rounded-lg bg-white p-5 shadow-sm">
             <div className="flex items-center gap-3">
@@ -190,7 +190,36 @@ export default function Dashboard() {
             Δεν βρέθηκαν παραστατικά
           </div>
         ) : (
-          <div className="overflow-x-auto">
+          {/* Mobile card view */}
+          <div className="block sm:hidden divide-y divide-gray-100">
+            {invoices.map((inv) => (
+              <div key={inv.id || inv.mark} className="p-4 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-slate-500">{inv.issue_date || inv.date || '-'}</span>
+                  <span
+                    className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+                      inv.direction === 'sent'
+                        ? 'bg-blue-100 text-blue-700'
+                        : 'bg-orange-100 text-orange-700'
+                    }`}
+                  >
+                    {inv.direction === 'sent' ? 'Εκδοθέν' : 'Ληφθέν'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <p className="text-sm text-slate-600 truncate mr-4">
+                    {inv.counterpart_name || inv.counterpart_afm || '-'}
+                  </p>
+                  <span className="text-sm font-semibold text-slate-800 whitespace-nowrap">
+                    {fmt(inv.total_amount || inv.gross_amount)}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Desktop table view */}
+          <div className="hidden sm:block overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b bg-gray-50 text-left text-xs font-medium uppercase text-gray-500">

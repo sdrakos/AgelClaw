@@ -84,19 +84,22 @@ export default function Layout() {
               <CompanySelector />
             </div>
 
-            <div className="flex items-center gap-4">
-              <span className="text-sm text-slate-600">{user?.name || user?.email}</span>
+            <div className="flex items-center gap-2 sm:gap-4">
+              <span className="hidden sm:inline text-sm text-slate-600">{user?.name || user?.email}</span>
               <button
                 onClick={logout}
-                className="rounded-md px-3 py-1.5 text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
+                className="rounded-md px-2 sm:px-3 py-1.5 text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
               >
-                Αποσύνδεση
+                <span className="hidden sm:inline">Αποσύνδεση</span>
+                <svg className="h-5 w-5 sm:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                </svg>
               </button>
             </div>
           </header>
 
           {/* Page content */}
-          <main className="flex-1 overflow-auto p-4 lg:p-6">
+          <main className="flex-1 overflow-auto p-3 sm:p-4 lg:p-6">
             <Outlet />
           </main>
         </div>

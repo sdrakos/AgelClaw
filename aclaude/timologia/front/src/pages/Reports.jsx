@@ -233,7 +233,7 @@ export default function Reports() {
       {genSuccess && (() => {
         const info = JSON.parse(genSuccess)
         return (
-          <div className="flex items-center justify-between rounded-lg bg-green-50 px-4 py-3 text-sm text-green-800">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 rounded-lg bg-green-50 px-4 py-3 text-sm text-green-800">
             <div className="flex items-center gap-2">
               <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
@@ -490,7 +490,57 @@ export default function Reports() {
               Δεν υπάρχουν προγραμματισμένες αναφορές
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            {/* Mobile card view */}
+            <div className="block sm:hidden divide-y divide-gray-100">
+              {schedules.map((s) => {
+                const sp = typeof s.params === 'string' ? (() => { try { return JSON.parse(s.params) } catch { return {} } })() : (s.params || {})
+                const periodLabel = PERIOD_OPTIONS.find((p) => p.value === sp.period)?.label
+                const dirLabel = DIRECTION_OPTIONS.find((d) => d.value === sp.direction)?.label
+                return (
+                  <div key={s.id} className="p-4 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="font-medium text-slate-700 text-sm">
+                          {PRESETS.find((p) => p.key === s.preset)?.label || s.preset}
+                        </p>
+                        {(periodLabel || dirLabel) && (
+                          <p className="text-xs text-slate-400 mt-0.5">
+                            {[periodLabel, dirLabel].filter(Boolean).join(' · ')}
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => toggleSchedule(s.id, s.enabled)}
+                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                          s.enabled ? 'bg-indigo-600' : 'bg-gray-300'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                            s.enabled ? 'translate-x-4.5' : 'translate-x-0.5'
+                          }`}
+                        />
+                      </button>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-xs text-slate-500">{s.cron}</span>
+                      <button
+                        onClick={() => deleteSchedule(s.id)}
+                        className="rounded px-2 py-1 text-xs font-medium text-red-500 hover:bg-red-50 hover:text-red-700 transition-colors"
+                      >
+                        Διαγραφή
+                      </button>
+                    </div>
+                    {s.recipients && (
+                      <p className="text-xs text-slate-400 truncate">{s.recipients}</p>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* Desktop table view */}
+            <div className="hidden sm:block overflow-x-auto">
               <table className="w-full min-w-[600px] text-sm">
                 <thead>
                   <tr className="border-b bg-gray-100 text-left text-xs font-medium uppercase text-gray-500">

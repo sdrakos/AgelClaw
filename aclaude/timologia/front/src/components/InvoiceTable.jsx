@@ -85,62 +85,100 @@ export default function InvoiceTable({ invoices, loading, sortKey, sortDir, onSo
   }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b bg-gray-100 text-left text-xs font-medium uppercase text-gray-500">
-            {COLUMNS.map((col) => (
-              <th
-                key={col.key}
-                onClick={() => handleSort(col.key)}
-                className={`cursor-pointer select-none px-4 py-3 hover:text-gray-700 ${
-                  col.align === 'right' ? 'text-right' : ''
+    <>
+      {/* Mobile card view */}
+      <div className="block lg:hidden divide-y divide-gray-100">
+        {invoices.map((inv, idx) => (
+          <div key={inv.id || inv.mark || idx} className="p-4 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-slate-500">{inv.issue_date || inv.date || '-'}</span>
+              <span
+                className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+                  inv.direction === 'sent'
+                    ? 'bg-blue-100 text-blue-700'
+                    : 'bg-orange-100 text-orange-700'
                 }`}
               >
-                <span className="inline-flex items-center gap-1">
-                  {col.label}
-                  {sortKey === col.key && (
-                    <span className="text-indigo-500">{sortDir === 'asc' ? '\u2191' : '\u2193'}</span>
-                  )}
-                </span>
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {invoices.map((inv, idx) => (
-            <tr key={inv.id || inv.mark || idx} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
-              <td className="px-4 py-3 text-slate-600">{inv.issue_date || inv.date || '-'}</td>
-              <td className="px-4 py-3 font-medium text-slate-700">
-                {inv.series || ''}{inv.aa ? `/${inv.aa}` : ''}
-              </td>
-              <td className="px-4 py-3 text-slate-600 max-w-[200px] truncate">
-                {inv.type_description || inv.invoice_type || '-'}
-              </td>
-              <td className="px-4 py-3 text-slate-600 font-mono text-xs">{inv.counterpart_afm || '-'}</td>
-              <td className="px-4 py-3 text-slate-600 max-w-[250px]">
-                <div className="truncate" title={getCounterpartDisplay(inv)}>
-                  {getCounterpartDisplay(inv)}
-                </div>
-              </td>
-              <td className="px-4 py-3 text-right font-medium text-slate-700">{fmt(inv.net_amount)}</td>
-              <td className="px-4 py-3 text-right text-slate-600">{fmt(inv.vat_amount)}</td>
-              <td className="px-4 py-3 text-right font-semibold text-slate-800">{fmt(inv.total_amount || inv.gross_amount)}</td>
-              <td className="px-4 py-3">
-                <span
-                  className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
-                    inv.direction === 'sent'
-                      ? 'bg-blue-100 text-blue-700'
-                      : 'bg-orange-100 text-orange-700'
+                {inv.direction === 'sent' ? 'Εκδοθέν' : 'Ληφθέν'}
+              </span>
+            </div>
+            <p className="text-sm font-medium text-slate-700 truncate">
+              {getCounterpartDisplay(inv)}
+            </p>
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-slate-400">
+                {inv.series || ''}{inv.aa ? `/${inv.aa}` : ''} {inv.type_description ? `· ${inv.type_description}` : ''}
+              </span>
+              <span className="text-sm font-semibold text-slate-800">
+                {fmt(inv.total_amount || inv.gross_amount)}
+              </span>
+            </div>
+            <div className="flex gap-4 text-xs text-slate-400">
+              <span>Καθαρό: {fmt(inv.net_amount)}</span>
+              <span>ΦΠΑ: {fmt(inv.vat_amount)}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Desktop table view */}
+      <div className="hidden lg:block overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b bg-gray-100 text-left text-xs font-medium uppercase text-gray-500">
+              {COLUMNS.map((col) => (
+                <th
+                  key={col.key}
+                  onClick={() => handleSort(col.key)}
+                  className={`cursor-pointer select-none px-4 py-3 hover:text-gray-700 ${
+                    col.align === 'right' ? 'text-right' : ''
                   }`}
                 >
-                  {inv.direction === 'sent' ? 'Εκδοθέν' : 'Ληφθέν'}
-                </span>
-              </td>
+                  <span className="inline-flex items-center gap-1">
+                    {col.label}
+                    {sortKey === col.key && (
+                      <span className="text-indigo-500">{sortDir === 'asc' ? '\u2191' : '\u2193'}</span>
+                    )}
+                  </span>
+                </th>
+              ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {invoices.map((inv, idx) => (
+              <tr key={inv.id || inv.mark || idx} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
+                <td className="px-4 py-3 text-slate-600">{inv.issue_date || inv.date || '-'}</td>
+                <td className="px-4 py-3 font-medium text-slate-700">
+                  {inv.series || ''}{inv.aa ? `/${inv.aa}` : ''}
+                </td>
+                <td className="px-4 py-3 text-slate-600 max-w-[200px] truncate">
+                  {inv.type_description || inv.invoice_type || '-'}
+                </td>
+                <td className="px-4 py-3 text-slate-600 font-mono text-xs">{inv.counterpart_afm || '-'}</td>
+                <td className="px-4 py-3 text-slate-600 max-w-[250px]">
+                  <div className="truncate" title={getCounterpartDisplay(inv)}>
+                    {getCounterpartDisplay(inv)}
+                  </div>
+                </td>
+                <td className="px-4 py-3 text-right font-medium text-slate-700">{fmt(inv.net_amount)}</td>
+                <td className="px-4 py-3 text-right text-slate-600">{fmt(inv.vat_amount)}</td>
+                <td className="px-4 py-3 text-right font-semibold text-slate-800">{fmt(inv.total_amount || inv.gross_amount)}</td>
+                <td className="px-4 py-3">
+                  <span
+                    className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+                      inv.direction === 'sent'
+                        ? 'bg-blue-100 text-blue-700'
+                        : 'bg-orange-100 text-orange-700'
+                    }`}
+                  >
+                    {inv.direction === 'sent' ? 'Εκδοθέν' : 'Ληφθέν'}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   )
 }

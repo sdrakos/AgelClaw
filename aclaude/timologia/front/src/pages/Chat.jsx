@@ -42,7 +42,7 @@ export default function Chat() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-8rem)] gap-4">
+    <div className="flex h-[calc(100vh-5rem)] sm:h-[calc(100vh-8rem)] gap-0 sm:gap-4">
       {/* Session sidebar toggle (mobile) */}
       <button
         onClick={() => setSidebarOpen(!sidebarOpen)}
