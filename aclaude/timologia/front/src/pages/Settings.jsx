@@ -16,7 +16,7 @@ const ROLES = [
 ]
 
 export default function Settings() {
-  const { activeCompanyId } = useCompany()
+  const { activeCompanyId, companies } = useCompany()
   const [tab, setTab] = useState('company')
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -41,22 +41,23 @@ export default function Settings() {
     setLoading(true)
     setError('')
 
-    apiJson(`/api/companies/${activeCompanyId}`)
-      .then((data) => {
-        const c = data.company || data
-        setCompanyName(c.name || '')
-        setCompanyAfm(c.afm || '')
-        setAadeUser(c.aade_user_id ? '********' : '')
-        setAadeKey(c.aade_subscription_key ? '********' : '')
-        setAadeEnv(c.aade_env || 'dev')
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false))
+    // Use company data from context (already fetched by CompanyProvider)
+    const company = companies.find((c) => c.id === activeCompanyId)
+    if (company) {
+      setCompanyName(company.name || '')
+      setCompanyAfm(company.afm || '')
+      setAadeEnv(company.aade_env || 'dev')
+      // Credentials are stripped from list response — show masked placeholder
+      setAadeUser('********')
+      setAadeKey('********')
+    }
+    setLoading(false)
 
+    // Members — may 404, that's ok
     apiJson(`/api/companies/${activeCompanyId}/members`)
       .then((data) => setMembers(data.members || data || []))
       .catch(() => setMembers([]))
-  }, [activeCompanyId])
+  }, [activeCompanyId, companies])
 
   const saveCompany = async (e) => {
     e.preventDefault()

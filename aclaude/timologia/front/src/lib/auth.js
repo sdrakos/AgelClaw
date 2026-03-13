@@ -3,8 +3,12 @@ export function getToken() {
 }
 
 export function getUser() {
-  const u = localStorage.getItem('user');
-  return u ? JSON.parse(u) : null;
+  try {
+    const u = localStorage.getItem('user');
+    return u ? JSON.parse(u) : null;
+  } catch {
+    return null;
+  }
 }
 
 export function setAuth(token, user) {

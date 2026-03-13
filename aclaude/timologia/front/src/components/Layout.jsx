@@ -7,7 +7,8 @@ import CompanySelector from './CompanySelector'
 const NAV_ITEMS = [
   { to: '/', label: 'Αρχική', icon: HomeIcon, end: true },
   { to: '/chat', label: 'Chat', icon: ChatIcon },
-  { to: '/invoices', label: 'Τιμολόγια', icon: InvoiceIcon },
+  { to: '/invoices', label: 'Παραστατικά', icon: InvoiceIcon },
+  { to: '/analytics', label: 'Στατιστικά', icon: AnalyticsIcon },
   { to: '/reports', label: 'Αναφορές', icon: ReportIcon },
   { to: '/settings', label: 'Ρυθμίσεις', icon: SettingsIcon },
 ]
@@ -119,6 +120,14 @@ function InvoiceIcon() {
   return (
     <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+    </svg>
+  )
+}
+
+function AnalyticsIcon() {
+  return (
+    <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 3v18h18M7 16l4-4 4 4 5-5" />
     </svg>
   )
 }

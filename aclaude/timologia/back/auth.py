@@ -17,7 +17,7 @@ def verify_password(password: str, hashed: str) -> bool:
 
 def create_token(user_id: int, role: str) -> str:
     payload = {
-        "sub": user_id,
+        "sub": str(user_id),
         "role": role,
         "exp": datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRY_HOURS),
     }
@@ -43,7 +43,9 @@ def register_user(email: str, password: str, name: str) -> dict:
             (email, hash_password(password), name),
         )
         user_id = cur.lastrowid
-    return {"id": user_id, "email": email, "name": name, "role": "user"}
+    token = create_token(user_id, "user")
+    user = {"id": user_id, "email": email, "name": name, "role": "user"}
+    return {"token": token, "user": user}
 
 
 def login_user(email: str, password: str) -> dict:

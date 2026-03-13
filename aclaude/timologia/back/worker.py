@@ -4,12 +4,14 @@ Usage:
     python worker.py
 """
 import logging
+import os
 import sys
 import time
 import threading
 
 from redis import Redis
-from rq import Worker, Queue
+from rq import Queue
+from rq.worker import SimpleWorker, Worker
 
 from config import REDIS_URL
 from jobs import check_and_enqueue_schedules
@@ -38,6 +40,9 @@ def scheduler_loop(queue: Queue):
 def main():
     logger.info("Starting Timologia worker...")
 
+    from db import run_migrations
+    run_migrations()
+
     redis_conn = Redis.from_url(REDIS_URL)
     queue = Queue("timologia", connection=redis_conn)
 
@@ -48,9 +53,10 @@ def main():
     sched_thread.start()
     logger.info("Scheduler thread started")
 
-    # Start RQ worker in main thread
-    worker = Worker([queue], connection=redis_conn, name="timologia-worker")
-    logger.info("RQ worker listening on queue 'timologia'")
+    # SimpleWorker on Windows (no os.fork), Worker on Linux
+    WorkerClass = SimpleWorker if os.name == "nt" else Worker
+    worker = WorkerClass([queue], connection=redis_conn, name="timologia-worker")
+    logger.info("RQ %s listening on queue 'timologia'", WorkerClass.__name__)
     worker.work(with_scheduler=False)
 
 

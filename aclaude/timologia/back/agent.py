@@ -1,9 +1,115 @@
 """OpenAI Agents SDK — Timologia assistant with AADE tools."""
 import json
+import re
+import os
+import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
-from agents import Agent, RunContext, function_tool
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+from agents import Agent, RunContextWrapper, function_tool
 from db import get_db
+
+
+# ── Greek timezone ──
+
+def _greek_now() -> datetime:
+    """Return current datetime in Greek timezone."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("Europe/Athens"))
+    except Exception:
+        return datetime.now(timezone(timedelta(hours=3)))
+
+
+# ── AFM Lookup (GSIS SOAP + SQLite cache) ──
+
+_AFM_CACHE_DB = Path(__file__).parent / "data" / "afm_cache.db"
+_GSIS_WSDL = "https://www1.gsis.gr/wsaade/RgWsPublic2/RgWsPublic2?WSDL"
+
+
+def _validate_afm(afm: str) -> bool:
+    afm = afm.strip().replace("EL", "").replace("el", "")
+    if not re.match(r'^\d{9}$', afm):
+        return False
+    digits = [int(d) for d in afm]
+    total = sum(digits[i] * (2 ** (8 - i)) for i in range(8))
+    return (total % 11) % 10 == digits[8]
+
+
+def _afm_cache_get(afm: str) -> dict | None:
+    """Get cached AFM info (90-day TTL)."""
+    _AFM_CACHE_DB.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with sqlite3.connect(str(_AFM_CACHE_DB)) as conn:
+            conn.execute("""CREATE TABLE IF NOT EXISTS businesses (
+                afm TEXT PRIMARY KEY, data JSON NOT NULL, lookup_date TEXT NOT NULL
+            )""")
+            row = conn.execute("SELECT data, lookup_date FROM businesses WHERE afm=?", (afm,)).fetchone()
+        if not row:
+            return None
+        data = json.loads(row[0])
+        lookup_dt = datetime.fromisoformat(row[1])
+        if (datetime.now() - lookup_dt).days > 90:
+            return None
+        return data
+    except Exception:
+        return None
+
+
+def _afm_cache_put(afm: str, data: dict):
+    _AFM_CACHE_DB.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with sqlite3.connect(str(_AFM_CACHE_DB)) as conn:
+            conn.execute("""CREATE TABLE IF NOT EXISTS businesses (
+                afm TEXT PRIMARY KEY, data JSON NOT NULL, lookup_date TEXT NOT NULL
+            )""")
+            conn.execute(
+                "INSERT OR REPLACE INTO businesses (afm, data, lookup_date) VALUES (?, ?, ?)",
+                (afm, json.dumps(data, ensure_ascii=False), datetime.now().isoformat()),
+            )
+    except Exception:
+        pass
+
+
+def _soap_lookup_afm(afm: str) -> dict:
+    """Call AADE RgWsPublic2 SOAP to look up business info by AFM."""
+    try:
+        from zeep import Client as SoapClient
+        from zeep.transports import Transport
+        from zeep.wsse.username import UsernameToken
+    except ImportError:
+        raise RuntimeError("zeep not installed: pip install zeep")
+
+    username = os.environ.get("GSIS_AFM_USERNAME", "")
+    password = os.environ.get("GSIS_AFM_PASSWORD", "")
+    caller = os.environ.get("GSIS_CALLER_AFM", "")
+
+    if not username or not password:
+        raise ValueError("GSIS_AFM_USERNAME and GSIS_AFM_PASSWORD env vars not set")
+
+    transport = Transport(timeout=30)
+    wsse = UsernameToken(username, password)
+    client = SoapClient(_GSIS_WSDL, transport=transport, wsse=wsse)
+
+    result = client.service.rgWsPublic2AfmMethod(
+        INPUT_REC={"afm_called_by": caller, "afm_called_for": afm}
+    )
+
+    if result.error_rec and result.error_rec.error_code:
+        raise RuntimeError(f"AADE error: {result.error_rec.error_code} - {result.error_rec.error_descr}")
+
+    basic = result.basic_rec if hasattr(result, "basic_rec") else result
+    info = {
+        "afm": afm,
+        "name": getattr(basic, "onomasia", "") or "",
+        "commercial_title": getattr(basic, "commer_title", "") or "",
+        "doy_code": str(getattr(basic, "doy", "") or ""),
+        "doy_description": getattr(basic, "doy_descr", "") or "",
+        "legal_status": getattr(basic, "legal_status_descr", "") or "",
+        "is_active": str(getattr(basic, "deactivation_flag", "1")) != "2",
+        "address": f"{getattr(basic, 'postal_address', '') or ''} {getattr(basic, 'postal_address_no', '') or ''}, {getattr(basic, 'postal_zip_code', '') or ''} {getattr(basic, 'postal_area_description', '') or ''}".strip(", "),
+    }
+    return info
 
 
 @dataclass
@@ -30,12 +136,12 @@ def _get_client(ctx: TimologiaContext):
 
 @function_tool
 async def get_invoices(
-    ctx: RunContext[TimologiaContext],
+    ctx: RunContextWrapper[TimologiaContext],
     date_from: str = "",
     date_to: str = "",
     direction: str = "sent",
 ) -> str:
-    """Ανάκτηση τιμολογίων από AADE. direction: 'sent' ή 'received'."""
+    """Ανάκτηση παραστατικών από AADE. direction: 'sent' ή 'received'."""
     tc = ctx.context
     client = _get_client(tc)
     try:
@@ -59,16 +165,17 @@ async def get_invoices(
 
 @function_tool
 async def income_summary(
-    ctx: RunContext[TimologiaContext],
+    ctx: RunContextWrapper[TimologiaContext],
     date_from: str = "",
     date_to: str = "",
 ) -> str:
     """Σύνοψη εσόδων για περίοδο. Επιστρέφει XML από AADE."""
     tc = ctx.context
+    today = _greek_now().strftime("%Y-%m-%d")
     if not date_from:
-        date_from = datetime.now().strftime("%Y-%m-%d")
+        date_from = today
     if not date_to:
-        date_to = datetime.now().strftime("%Y-%m-%d")
+        date_to = today
     client = _get_client(tc)
     try:
         data = await client.get_income(date_from, date_to)
@@ -81,16 +188,17 @@ async def income_summary(
 
 @function_tool
 async def expenses_summary(
-    ctx: RunContext[TimologiaContext],
+    ctx: RunContextWrapper[TimologiaContext],
     date_from: str = "",
     date_to: str = "",
 ) -> str:
     """Σύνοψη εξόδων για περίοδο. Επιστρέφει XML από AADE."""
     tc = ctx.context
+    today = _greek_now().strftime("%Y-%m-%d")
     if not date_from:
-        date_from = datetime.now().strftime("%Y-%m-%d")
+        date_from = today
     if not date_to:
-        date_to = datetime.now().strftime("%Y-%m-%d")
+        date_to = today
     client = _get_client(tc)
     try:
         data = await client.get_expenses(date_from, date_to)
@@ -103,20 +211,21 @@ async def expenses_summary(
 
 @function_tool
 async def send_invoice(
-    ctx: RunContext[TimologiaContext],
+    ctx: RunContextWrapper[TimologiaContext],
     counterpart_vat: str,
     invoice_type: str,
     series: str,
     number: int,
-    items: list[dict],
+    items_json: str,
     dry_run: bool = True,
 ) -> str:
-    """Αποστολή τιμολογίου στο AADE.
-    items: [{"net_value": 100, "vat_category": 1, ...}]
+    """Αποστολή παραστατικού στο AADE.
+    items_json: JSON string, π.χ. '[{"net_value": 100, "vat_category": 1}]'
     dry_run=True: επιστρέφει preview χωρίς αποστολή.
     dry_run=False: αποστέλλει πραγματικά στο AADE.
     """
     tc = ctx.context
+    items = json.loads(items_json)
 
     from invoice_xml import build_invoice_xml
 
@@ -170,7 +279,7 @@ async def send_invoice(
                 "number": number,
                 "items": items,
             },
-            "message": "Προεπισκόπηση τιμολογίου. Πατήστε 'Επιβεβαίωση' για αποστολή.",
+            "message": "Προεπισκόπηση παραστατικού. Πατήστε 'Επιβεβαίωση' για αποστολή.",
         }, ensure_ascii=False)
 
     # Real send
@@ -192,11 +301,11 @@ async def send_invoice(
 
 @function_tool
 async def cancel_invoice(
-    ctx: RunContext[TimologiaContext],
+    ctx: RunContextWrapper[TimologiaContext],
     mark: str,
     dry_run: bool = True,
 ) -> str:
-    """Ακύρωση τιμολογίου βάσει MARK.
+    """Ακύρωση παραστατικού βάσει MARK.
     dry_run=True: επιστρέφει preview.
     dry_run=False: ακυρώνει πραγματικά.
     """
@@ -213,7 +322,7 @@ async def cancel_invoice(
             "original_args": {
                 "mark": mark,
             },
-            "message": f"Θα ακυρωθεί το τιμολόγιο με MARK {mark}. Πατήστε 'Επιβεβαίωση' για ακύρωση.",
+            "message": f"Θα ακυρωθεί το παραστατικό με MARK {mark}. Πατήστε 'Επιβεβαίωση' για ακύρωση.",
         }, ensure_ascii=False)
 
     # Real cancel
@@ -234,29 +343,39 @@ async def cancel_invoice(
 
 @function_tool
 async def generate_report_tool(
-    ctx: RunContext[TimologiaContext],
+    ctx: RunContextWrapper[TimologiaContext],
     preset: str = "daily_summary",
     date_from: str = "",
     date_to: str = "",
 ) -> str:
     """Δημιουργία λογιστικής αναφοράς (Excel).
     presets: daily_summary, monthly_vat, quarterly_income, annual_overview, custom.
+    ΣΗΜΑΝΤΙΚΟ: Αν ο χρήστης ζητήσει αναφορά για συγκεκριμένη ημερομηνία (π.χ. "10/03/2026"),
+    χρησιμοποίησε preset="custom" με date_from και date_to σε μορφή YYYY-MM-DD.
+    Χρησιμοποίησε daily_summary ΜΟΝΟ αν ζητήσει "σήμερα" ή "ημερήσια" χωρίς ημερομηνία.
+    Το αρχείο Excel κατεβαίνει αυτόματα στον χρήστη — ΜΗΝ εμφανίσεις path ή link.
     """
     tc = ctx.context
     from reports import generate_report
 
     params = {}
-    if preset == "custom":
+    # If date_from/date_to provided, always use custom preset
+    if date_from or date_to:
+        preset = "custom"
+        params = {"date_from": date_from, "date_to": date_to}
+    elif preset == "custom":
         params = {"date_from": date_from, "date_to": date_to}
 
     result = await generate_report(tc.company_id, tc.user_id, preset, params)
+    # Remove file_path — the frontend handles download via report ID
+    result.pop("file_path", None)
     return json.dumps(result, ensure_ascii=False, default=str)
 
 
 # ── Tool 7: List Companies ──
 
 @function_tool
-async def list_companies(ctx: RunContext[TimologiaContext]) -> str:
+async def list_companies(ctx: RunContextWrapper[TimologiaContext]) -> str:
     """Λίστα εταιρειών στις οποίες έχει πρόσβαση ο χρήστης."""
     tc = ctx.context
     with get_db() as conn:
@@ -274,7 +393,7 @@ async def list_companies(ctx: RunContext[TimologiaContext]) -> str:
 # ── Tool 8: Get Company Settings ──
 
 @function_tool
-async def get_company_settings(ctx: RunContext[TimologiaContext]) -> str:
+async def get_company_settings(ctx: RunContextWrapper[TimologiaContext]) -> str:
     """Ρυθμίσεις τρέχουσας εταιρείας."""
     tc = ctx.context
     with get_db() as conn:
@@ -291,7 +410,7 @@ async def get_company_settings(ctx: RunContext[TimologiaContext]) -> str:
 
 @function_tool
 async def update_company_settings(
-    ctx: RunContext[TimologiaContext],
+    ctx: RunContextWrapper[TimologiaContext],
     name: str = "",
     aade_env: str = "",
     dry_run: bool = True,
@@ -341,22 +460,111 @@ async def update_company_settings(
     }, ensure_ascii=False)
 
 
+# ── Tool 10: Lookup AFM ──
+
+@function_tool
+async def lookup_afm(
+    ctx: RunContextWrapper[TimologiaContext],
+    afm: str,
+) -> str:
+    """Αναζήτηση στοιχείων επιχείρησης από ΑΦΜ μέσω ΑΑΔΕ (GSIS).
+    Επιστρέφει: επωνυμία, ΔΟΥ, διεύθυνση, νομική μορφή, κατάσταση.
+    Χρησιμοποίησε αυτό το tool για να βρεις το όνομα ενός προμηθευτή/πελάτη από το ΑΦΜ του.
+    """
+    afm = afm.strip().replace("EL", "").replace("el", "")
+
+    if not _validate_afm(afm):
+        return json.dumps({"error": f"Μη έγκυρο ΑΦΜ: {afm}"}, ensure_ascii=False)
+
+    # Check cache first
+    cached = _afm_cache_get(afm)
+    if cached:
+        cached["_source"] = "cache"
+        return json.dumps(cached, ensure_ascii=False)
+
+    # SOAP lookup
+    try:
+        info = _soap_lookup_afm(afm)
+    except Exception as e:
+        return json.dumps({"error": f"Αποτυχία αναζήτησης ΑΑΔΕ: {e}"}, ensure_ascii=False)
+
+    _afm_cache_put(afm, info)
+    info["_source"] = "aade_live"
+    return json.dumps(info, ensure_ascii=False)
+
+
+# ── Tool 11: Email Report ──
+
+@function_tool
+async def email_report(
+    ctx: RunContextWrapper[TimologiaContext],
+    report_id: int,
+    to_emails: str,
+    subject: str = "",
+    body: str = "",
+) -> str:
+    """Αποστολή αναφοράς Excel με email.
+    report_id: ID αναφοράς (από generate_report_tool).
+    to_emails: Email παραληπτών χωρισμένα με κόμμα (π.χ. "a@b.com, c@d.com").
+    subject: Θέμα email (προαιρετικό).
+    body: HTML περιεχόμενο email (προαιρετικό).
+    """
+    tc = ctx.context
+    recipients = [e.strip() for e in to_emails.split(",") if e.strip()]
+    if not recipients:
+        return json.dumps({"error": "Δεν δόθηκαν παραλήπτες."}, ensure_ascii=False)
+
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM report_history WHERE id=? AND company_id=?",
+            (report_id, tc.company_id),
+        ).fetchone()
+    if not row:
+        return json.dumps({"error": f"Αναφορά #{report_id} δεν βρέθηκε."}, ensure_ascii=False)
+
+    from pathlib import Path
+    file_path = Path(row["file_path"])
+    if not file_path.exists():
+        return json.dumps({"error": "Το αρχείο αναφοράς δεν βρέθηκε στον δίσκο."}, ensure_ascii=False)
+
+    if not subject:
+        subject = f"Αναφορά {row['preset']} - {tc.company_name}"
+    if not body:
+        body = f"<p>Επισυνάπτεται η αναφορά <b>{file_path.name}</b> για την εταιρεία {tc.company_name}.</p>"
+
+    from email_sender import send_email
+    result = send_email(recipients, subject, body, attachments=[str(file_path)])
+    return json.dumps(result, ensure_ascii=False)
+
+
 # ── Agent Factory ──
 
 def create_agent(context: TimologiaContext) -> Agent:
     """Create a Timologia AI agent for the given company context."""
-    instructions = f"""Είσαι ο βοηθός τιμολόγησης για την εταιρεία "{context.company_name}" (ΑΦΜ: {context.afm}).
+    now = _greek_now()
+    today_str = now.strftime("%d/%m/%Y")
+    day_names = ["Δευτέρα", "Τρίτη", "Τετάρτη", "Πέμπτη", "Παρασκευή", "Σάββατο", "Κυριακή"]
+    day_name = day_names[now.weekday()]
+    time_str = now.strftime("%H:%M")
+
+    instructions = f"""Είσαι ο βοηθός παραστατικών για την εταιρεία "{context.company_name}" (ΑΦΜ: {context.afm}).
 Περιβάλλον AADE: {context.aade_env}.
+Σημερινή ημερομηνία: {day_name} {today_str}, ώρα {time_str} (Ελλάδα).
 
 ΚΑΝΟΝΕΣ:
 1. Απαντάς ΠΑΝΤΑ στα Ελληνικά.
-2. Για κάθε ενέργεια εγγραφής (αποστολή τιμολογίου, ακύρωση, αλλαγή ρυθμίσεων) ΠΑΝΤΑ κάνεις πρώτα dry_run=True.
-3. ΠΟΤΕ μην στέλνεις τιμολόγιο ή ακυρώνεις χωρίς dry_run πρώτα — ο χρήστης πρέπει να επιβεβαιώσει.
-4. Όταν ο χρήστης ρωτάει για τιμολόγια, χρησιμοποίησε get_invoices.
+2. Για κάθε ενέργεια εγγραφής (αποστολή παραστατικού, ακύρωση, αλλαγή ρυθμίσεων) ΠΑΝΤΑ κάνεις πρώτα dry_run=True.
+3. ΠΟΤΕ μην στέλνεις παραστατικό ή ακυρώνεις χωρίς dry_run πρώτα — ο χρήστης πρέπει να επιβεβαιώσει.
+4. Όταν ο χρήστης ρωτάει για παραστατικά, χρησιμοποίησε get_invoices.
 5. Για αναφορές/reports χρησιμοποίησε generate_report_tool.
 6. Μην εμφανίζεις ποτέ credentials (aade_user_id, subscription_key).
 7. Τα ποσά εμφανίζονται σε EUR με 2 δεκαδικά.
 8. Ο χρήστης έχει ρόλο "{context.user_role}" σε αυτή την εταιρεία.
+9. Όταν ένα παραστατικό εμφανίζει μόνο ΑΦΜ αντισυμβαλλομένου χωρίς επωνυμία, ΠΑΝΤΑ χρησιμοποίησε lookup_afm για να βρεις την επωνυμία.
+10. Στα αποτελέσματα εμφάνιζε ΠΑΝΤΑ την επωνυμία μαζί με το ΑΦΜ (π.χ. "ΕΤΑΙΡΕΙΑ ΑΕ (ΑΦΜ: 094388099)").
+11. Όταν δημιουργείται αναφορά Excel, ΜΗΝ εμφανίσεις file path, link ή URL. Απλά ανέφερε ότι η αναφορά δημιουργήθηκε — το κουμπί λήψης εμφανίζεται αυτόματα στο chat.
+12. Για αποστολή αναφοράς με email, χρησιμοποίησε email_report με το report_id από generate_report_tool. Ρώτα τον χρήστη για τη διεύθυνση email αν δεν τη δώσει.
+13. ΜΟΡΦΟΠΟΙΗΣΗ: Γράψε απλό κείμενο χωρίς Markdown σύμβολα. ΠΟΤΕ μην χρησιμοποιείς **, ##, ###, ---, ``` ή άλλα σύμβολα μορφοποίησης. Για λίστες χρησιμοποίησε απλές παύλες (-). Για πίνακες χρησιμοποίησε στοίχιση με κενά ή απλή λίστα.
 """
 
     return Agent(
@@ -373,5 +581,7 @@ def create_agent(context: TimologiaContext) -> Agent:
             list_companies,
             get_company_settings,
             update_company_settings,
+            lookup_afm,
+            email_report,
         ],
     )

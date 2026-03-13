@@ -4,6 +4,7 @@ AADE myDATA HTTP Client
 Adapted from the AgelClaw AADE MCP server for the Timologia web app.
 Handles invoice submission, retrieval, cancellation, and income/expenses queries.
 """
+import asyncio
 import httpx
 from datetime import date
 from decimal import Decimal
@@ -43,20 +44,48 @@ class MyDataClient:
         await self._http.aclose()
 
     async def _post(self, endpoint, xml_data):
-        resp = await self._http.post(
-            f"{self.base_url}/{endpoint}",
-            headers=self.headers,
-            content=xml_data,
-        )
+        for attempt in range(4):
+            resp = await self._http.post(
+                f"{self.base_url}/{endpoint}",
+                headers=self.headers,
+                content=xml_data,
+            )
+            if resp.status_code != 429:
+                return resp.content
+            # Rate limited — wait and retry
+            wait = self._parse_retry_after(resp)
+            await asyncio.sleep(wait)
         return resp.content
 
     async def _get(self, endpoint, params=None):
-        resp = await self._http.get(
-            f"{self.base_url}/{endpoint}",
-            headers=self.headers,
-            params=params,
-        )
+        for attempt in range(4):
+            resp = await self._http.get(
+                f"{self.base_url}/{endpoint}",
+                headers=self.headers,
+                params=params,
+            )
+            if resp.status_code != 429:
+                return resp.content
+            # Rate limited — wait and retry
+            wait = self._parse_retry_after(resp)
+            await asyncio.sleep(wait)
         return resp.content
+
+    @staticmethod
+    def _parse_retry_after(resp) -> int:
+        """Extract wait seconds from 429 response."""
+        try:
+            import json as _json
+            body = _json.loads(resp.content)
+            msg = body.get("message", "")
+            # "Try again in 48 seconds."
+            import re
+            m = re.search(r"(\d+)\s*second", msg)
+            if m:
+                return int(m.group(1)) + 1
+        except Exception:
+            pass
+        return 30
 
     async def send_invoice_xml(self, xml_bytes: bytes):
         """Send pre-built invoice XML to AADE."""

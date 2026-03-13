@@ -3,9 +3,10 @@ import { api, apiJson } from '../lib/api'
 import { useCompany } from '../context/CompanyContext'
 
 const PRESETS = [
-  { key: 'daily_summary', label: 'Ημερήσια Σύνοψη', desc: 'Τιμολόγια ημέρας + σύνοψη' },
+  { key: 'daily_summary', label: 'Ημερήσια Σύνοψη', desc: 'Παραστατικά ημέρας + σύνοψη' },
   { key: 'monthly_vat', label: 'Μηνιαίο ΦΠΑ', desc: 'Ανάλυση ΦΠΑ μήνα' },
   { key: 'quarterly_income', label: 'Τριμηνιαία Έσοδα', desc: 'Σύνοψη εσόδων τριμήνου' },
+  { key: 'expenses_by_supplier', label: 'Έξοδα ανά Προμηθευτή', desc: 'Ανάλυση εξόδων ανά προμηθευτή' },
   { key: 'annual_overview', label: 'Ετήσια Επισκόπηση', desc: 'Ολική εικόνα χρήσης' },
   { key: 'custom', label: 'Προσαρμοσμένη', desc: 'Επιλέξτε παραμέτρους' },
 ]
@@ -18,13 +19,41 @@ const CRON_OPTIONS = [
 
 const DAYS = ['Δευτέρα', 'Τρίτη', 'Τετάρτη', 'Πέμπτη', 'Παρασκευή', 'Σάββατο', 'Κυριακή']
 
+const PERIOD_OPTIONS = [
+  { value: 'today', label: 'Σήμερα' },
+  { value: 'yesterday', label: 'Χθες' },
+  { value: 'last_7_days', label: 'Τελευταίες 7 ημέρες' },
+  { value: 'last_30_days', label: 'Τελευταίες 30 ημέρες' },
+  { value: 'current_month', label: 'Τρέχων μήνας' },
+  { value: 'previous_month', label: 'Προηγούμενος μήνας' },
+  { value: 'current_quarter', label: 'Τρέχον τρίμηνο' },
+  { value: 'current_year', label: 'Τρέχον έτος' },
+]
+
+const DIRECTION_OPTIONS = [
+  { value: 'all', label: 'Όλα (Έσοδα + Έξοδα)' },
+  { value: 'sent', label: 'Μόνο Έσοδα' },
+  { value: 'received', label: 'Μόνο Έξοδα' },
+]
+
 export default function Reports() {
   const { activeCompanyId } = useCompany()
   const [generating, setGenerating] = useState(null)
   const [genError, setGenError] = useState('')
+  const [genSuccess, setGenSuccess] = useState('')
   const [schedules, setSchedules] = useState([])
   const [loadingSchedules, setLoadingSchedules] = useState(true)
   const [showScheduleForm, setShowScheduleForm] = useState(false)
+
+  // Date range modal state (for presets that need date selection)
+  const [dateModal, setDateModal] = useState(null) // preset key
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+
+  // Email modal state
+  const [emailModal, setEmailModal] = useState(null) // { reportId, filename }
+  const [emailTo, setEmailTo] = useState('')
+  const [emailSending, setEmailSending] = useState(false)
 
   // Schedule form state
   const [schedPreset, setSchedPreset] = useState('daily_summary')
@@ -32,6 +61,8 @@ export default function Reports() {
   const [schedDay, setSchedDay] = useState(0)
   const [schedTime, setSchedTime] = useState('09:00')
   const [schedRecipients, setSchedRecipients] = useState('')
+  const [schedPeriod, setSchedPeriod] = useState('current_month')
+  const [schedDirection, setSchedDirection] = useState('all')
 
   useEffect(() => {
     if (!activeCompanyId) return
@@ -42,13 +73,34 @@ export default function Reports() {
       .finally(() => setLoadingSchedules(false))
   }, [activeCompanyId])
 
-  const generateReport = async (preset) => {
+  const NEEDS_DATES = ['expenses_by_supplier', 'custom']
+
+  const handleGenerateClick = (preset) => {
+    if (NEEDS_DATES.includes(preset)) {
+      setDateModal(preset)
+      setDateFrom('')
+      setDateTo('')
+    } else {
+      generateReport(preset)
+    }
+  }
+
+  const handleDateSubmit = (e) => {
+    e.preventDefault()
+    if (!dateFrom || !dateTo) return
+    const preset = dateModal
+    setDateModal(null)
+    generateReport(preset, { date_from: dateFrom, date_to: dateTo })
+  }
+
+  const generateReport = async (preset, params = {}) => {
     setGenerating(preset)
     setGenError('')
+    setGenSuccess('')
     try {
       const data = await apiJson('/api/reports/generate', {
         method: 'POST',
-        body: JSON.stringify({ company_id: activeCompanyId, preset }),
+        body: JSON.stringify({ company_id: activeCompanyId, preset, params }),
       })
 
       if (data.error) {
@@ -56,22 +108,53 @@ export default function Reports() {
         return
       }
 
+      const id = data.report_id || data.id
+      const filename = data.filename || `report_${preset}.xlsx`
+
       // Download the file
-      if (data.report_id || data.id) {
-        const id = data.report_id || data.id
+      if (id) {
         const res = await api(`/api/reports/download/${id}`)
         const blob = await res.blob()
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
         a.href = url
-        a.download = data.filename || `report_${preset}.xlsx`
+        a.download = filename
         a.click()
         URL.revokeObjectURL(url)
       }
+
+      // Show email option
+      setGenSuccess(JSON.stringify({ id, filename }))
     } catch {
       setGenError('Σφάλμα δημιουργίας αναφοράς')
     } finally {
       setGenerating(null)
+    }
+  }
+
+  const sendReportEmail = async (e) => {
+    e.preventDefault()
+    if (!emailModal || !emailTo.trim()) return
+    setEmailSending(true)
+    setGenError('')
+    try {
+      const data = await apiJson(`/api/reports/${emailModal.reportId}/email`, {
+        method: 'POST',
+        body: JSON.stringify({ to: emailTo.split(',').map((e) => e.trim()).filter(Boolean) }),
+      })
+      if (data.success) {
+        setGenSuccess('')
+        setEmailModal(null)
+        setEmailTo('')
+        setGenError('')
+        alert('Email στάλθηκε!')
+      } else {
+        setGenError(data.error || 'Σφάλμα αποστολής')
+      }
+    } catch {
+      setGenError('Σφάλμα αποστολής email')
+    } finally {
+      setEmailSending(false)
     }
   }
 
@@ -82,12 +165,20 @@ export default function Reports() {
     else if (schedFreq === 'weekly') cron = `weekly_${schedDay}_${schedTime}`
     else if (schedFreq === 'monthly') cron = `monthly_1_${schedTime}`
 
+    // Build params for custom/expenses_by_supplier presets
+    const params = {}
+    if (schedPreset === 'custom' || schedPreset === 'expenses_by_supplier') {
+      params.period = schedPeriod
+      params.direction = schedDirection
+    }
+
     try {
       const data = await apiJson('/api/reports/schedules', {
         method: 'POST',
         body: JSON.stringify({
           company_id: activeCompanyId,
           preset: schedPreset,
+          params,
           cron,
           recipients: schedRecipients,
         }),
@@ -138,6 +229,110 @@ export default function Reports() {
         <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600">{genError}</div>
       )}
 
+      {/* Success bar with email option */}
+      {genSuccess && (() => {
+        const info = JSON.parse(genSuccess)
+        return (
+          <div className="flex items-center justify-between rounded-lg bg-green-50 px-4 py-3 text-sm text-green-800">
+            <div className="flex items-center gap-2">
+              <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+              <span>Η αναφορά <b>{info.filename}</b> κατέβηκε.</span>
+            </div>
+            <button
+              onClick={() => { setEmailModal({ reportId: info.id, filename: info.filename }); setEmailTo('') }}
+              className="flex items-center gap-1 rounded-md bg-green-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-800 transition-colors"
+            >
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+              </svg>
+              Αποστολή Email
+            </button>
+          </div>
+        )
+      })()}
+
+      {/* Email modal */}
+      {emailModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setEmailModal(null)}>
+          <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-slate-800">Αποστολή Αναφοράς</h3>
+            <p className="mt-1 text-sm text-gray-500">{emailModal.filename}</p>
+            <form onSubmit={sendReportEmail} className="mt-4 space-y-3">
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-600">Παραλήπτες (κόμμα)</label>
+                <input
+                  type="text"
+                  value={emailTo}
+                  onChange={(e) => setEmailTo(e.target.value)}
+                  placeholder="user@example.com, other@example.com"
+                  autoFocus
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-slate-700 placeholder-gray-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"
+                />
+              </div>
+              <div className="flex justify-end gap-2">
+                <button type="button" onClick={() => setEmailModal(null)}
+                  className="rounded-md px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 transition-colors">
+                  Ακύρωση
+                </button>
+                <button type="submit" disabled={emailSending || !emailTo.trim()}
+                  className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors">
+                  {emailSending ? 'Αποστολή...' : 'Αποστολή'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Date range modal */}
+      {dateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setDateModal(null)}>
+          <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-slate-800">Επιλογή Περιόδου</h3>
+            <p className="mt-1 text-sm text-gray-500">
+              {PRESETS.find((p) => p.key === dateModal)?.label}
+            </p>
+            <form onSubmit={handleDateSubmit} className="mt-4 space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-gray-600">Από</label>
+                  <input
+                    type="date"
+                    value={dateFrom}
+                    onChange={(e) => setDateFrom(e.target.value)}
+                    required
+                    autoFocus
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-slate-700 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-gray-600">Έως</label>
+                  <input
+                    type="date"
+                    value={dateTo}
+                    onChange={(e) => setDateTo(e.target.value)}
+                    required
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-slate-700 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"
+                  />
+                </div>
+              </div>
+              <div className="flex justify-end gap-2">
+                <button type="button" onClick={() => setDateModal(null)}
+                  className="rounded-md px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 transition-colors">
+                  Ακύρωση
+                </button>
+                <button type="submit" disabled={!dateFrom || !dateTo}
+                  className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors">
+                  Δημιουργία
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Generate now */}
       <div>
         <h2 className="mb-3 text-lg font-semibold text-slate-700">Εκτέλεση Τώρα</h2>
@@ -147,7 +342,7 @@ export default function Reports() {
               <h3 className="font-medium text-slate-800">{p.label}</h3>
               <p className="mt-1 text-sm text-gray-500">{p.desc}</p>
               <button
-                onClick={() => generateReport(p.key)}
+                onClick={() => handleGenerateClick(p.key)}
                 disabled={generating !== null}
                 className="mt-3 rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
@@ -235,6 +430,36 @@ export default function Reports() {
                 />
               </div>
 
+              {(schedPreset === 'custom' || schedPreset === 'expenses_by_supplier') && (
+                <>
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-600">Περίοδος</label>
+                    <select
+                      value={schedPeriod}
+                      onChange={(e) => setSchedPeriod(e.target.value)}
+                      className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-slate-700 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"
+                    >
+                      {PERIOD_OPTIONS.map((p) => (
+                        <option key={p.value} value={p.value}>{p.label}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-600">Κατεύθυνση</label>
+                    <select
+                      value={schedDirection}
+                      onChange={(e) => setSchedDirection(e.target.value)}
+                      className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-slate-700 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"
+                    >
+                      {DIRECTION_OPTIONS.map((d) => (
+                        <option key={d.value} value={d.value}>{d.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                </>
+              )}
+
               <div className="sm:col-span-2">
                 <label className="mb-1 block text-sm font-medium text-gray-600">Παραλήπτες (email, κόμμα)</label>
                 <input
@@ -266,25 +491,38 @@ export default function Reports() {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[600px] text-sm">
                 <thead>
                   <tr className="border-b bg-gray-100 text-left text-xs font-medium uppercase text-gray-500">
-                    <th className="px-4 py-3">Τύπος</th>
-                    <th className="px-4 py-3">Χρονοπρόγραμμα</th>
-                    <th className="px-4 py-3">Παραλήπτες</th>
-                    <th className="px-4 py-3">Κατάσταση</th>
-                    <th className="px-4 py-3">Ενέργειες</th>
+                    <th className="whitespace-nowrap px-4 py-3">Τύπος</th>
+                    <th className="whitespace-nowrap px-4 py-3">Χρονοπρόγραμμα</th>
+                    <th className="whitespace-nowrap px-4 py-3">Παραλήπτες</th>
+                    <th className="whitespace-nowrap px-4 py-3 w-20 text-center">Κατάσταση</th>
+                    <th className="whitespace-nowrap px-4 py-3 w-24 text-center">Ενέργειες</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {schedules.map((s) => (
+                  {schedules.map((s) => {
+                    const sp = typeof s.params === 'string' ? (() => { try { return JSON.parse(s.params) } catch { return {} } })() : (s.params || {})
+                    const periodLabel = PERIOD_OPTIONS.find((p) => p.value === sp.period)?.label
+                    const dirLabel = DIRECTION_OPTIONS.find((d) => d.value === sp.direction)?.label
+                    return (
                     <tr key={s.id} className="border-b border-gray-50 hover:bg-gray-50">
-                      <td className="px-4 py-3 font-medium text-slate-700">
-                        {PRESETS.find((p) => p.key === s.preset)?.label || s.preset}
-                      </td>
-                      <td className="px-4 py-3 text-slate-600">{s.cron}</td>
-                      <td className="px-4 py-3 text-slate-600 max-w-[200px] truncate">{s.recipients}</td>
                       <td className="px-4 py-3">
+                        <div className="font-medium text-slate-700 whitespace-nowrap">
+                          {PRESETS.find((p) => p.key === s.preset)?.label || s.preset}
+                        </div>
+                        {(periodLabel || dirLabel) && (
+                          <div className="text-xs text-slate-400 mt-0.5">
+                            {[periodLabel, dirLabel].filter(Boolean).join(' · ')}
+                          </div>
+                        )}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-slate-600">{s.cron}</td>
+                      <td className="px-4 py-3 text-slate-600 max-w-[250px] truncate" title={s.recipients}>
+                        {s.recipients}
+                      </td>
+                      <td className="px-4 py-3 text-center">
                         <button
                           onClick={() => toggleSchedule(s.id, s.enabled)}
                           className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
@@ -298,16 +536,17 @@ export default function Reports() {
                           />
                         </button>
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="whitespace-nowrap px-4 py-3 text-center">
                         <button
                           onClick={() => deleteSchedule(s.id)}
-                          className="text-red-500 hover:text-red-700 text-xs font-medium"
+                          className="rounded px-2 py-1 text-xs font-medium text-red-500 hover:bg-red-50 hover:text-red-700 transition-colors"
                         >
                           Διαγραφή
                         </button>
                       </td>
                     </tr>
-                  ))}
+                    )
+                  })}
                 </tbody>
               </table>
             </div>

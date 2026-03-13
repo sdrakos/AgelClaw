@@ -285,7 +285,11 @@ class Memory:
             return [dict(r) for r in rows]
 
     def get_next_due_time(self) -> Optional[datetime]:
-        """Get the earliest next_run_at for pending tasks (for smart scheduler sleep)."""
+        """Get the earliest next_run_at for pending tasks (for smart scheduler sleep).
+
+        Uses >= to include tasks due right now (e.g. after missed task recovery).
+        The scheduler handles past-due times by setting timeout=0.1.
+        """
         now = datetime.now().isoformat()
         with self._conn() as conn:
             row = conn.execute(
@@ -293,7 +297,7 @@ class Memory:
                    FROM tasks
                    WHERE status = 'pending'
                    AND next_run_at IS NOT NULL
-                   AND next_run_at > ?""",
+                   AND next_run_at >= ?""",
                 (now,),
             ).fetchone()
             if row and row["earliest"]:

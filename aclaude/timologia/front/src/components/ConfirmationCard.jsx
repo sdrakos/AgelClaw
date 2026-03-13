@@ -6,8 +6,8 @@ export default function ConfirmationCard({ confirmation, onResult }) {
   const { id, action_type, preview } = confirmation
 
   const ACTION_LABELS = {
-    send_invoice: 'Αποστολή Τιμολογίου',
-    cancel_invoice: 'Ακύρωση Τιμολογίου',
+    send_invoice: 'Αποστολή Παραστατικού',
+    cancel_invoice: 'Ακύρωση Παραστατικού',
     generate_report: 'Δημιουργία Αναφοράς',
   }
 

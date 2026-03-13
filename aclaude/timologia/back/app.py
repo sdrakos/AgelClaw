@@ -12,6 +12,7 @@ from db import run_migrations, get_db
 from auth import get_current_user, register_user, login_user, get_member_role, require_role
 from config import PORT, FERNET, REPORTS_DIR
 from chat import router as chat_router
+from analytics import router as analytics_router
 
 
 @asynccontextmanager
@@ -31,6 +32,7 @@ app.add_middleware(
 )
 
 app.include_router(chat_router)
+app.include_router(analytics_router)
 
 
 # --- Pydantic models ---
@@ -127,6 +129,20 @@ async def update_company(company_id: int, req: CompanyReq, user=Depends(get_curr
         )
     return {"ok": True}
 
+@app.get("/api/companies/{company_id}/members")
+async def list_members(company_id: int, user=Depends(get_current_user)):
+    role = get_member_role(user["id"], company_id)
+    if not role:
+        raise HTTPException(403, "Not a member of this company")
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT cm.user_id, cm.role, u.name, u.email "
+            "FROM company_members cm JOIN users u ON u.id=cm.user_id "
+            "WHERE cm.company_id=? ORDER BY u.name",
+            (company_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
 @app.post("/api/companies/{company_id}/members")
 async def add_member(company_id: int, req: MemberReq, user=Depends(get_current_user)):
     require_role(user["id"], company_id, "owner")
@@ -204,12 +220,63 @@ async def _sync_invoices(company_id: int, force: bool = False):
     finally:
         await client.close()
 
+    # Resolve counterpart names from AFM via GSIS cache
+    all_invoices = [(inv, "sent") for inv in sent] + [(inv, "received") for inv in received]
+    _resolve_counterpart_names(all_invoices)
+
     now_str = datetime.now().isoformat()
     with get_db() as conn:
         for inv in sent:
             _upsert_invoice(conn, company_id, inv, "sent", now_str)
         for inv in received:
             _upsert_invoice(conn, company_id, inv, "received", now_str)
+
+
+def _resolve_counterpart_names(invoices_with_dir: list):
+    """Resolve counterpart names from AFM via GSIS SOAP cache.
+
+    For sent invoices: counterpart is in counterpart_vat / counterpart_name
+    For received invoices: counterpart (supplier) is in issuer_vat / issuer_name
+    """
+    from agent import _validate_afm, _afm_cache_get, _afm_cache_put
+    try:
+        from agent import _soap_lookup_afm
+    except Exception:
+        return
+
+    for inv, direction in invoices_with_dir:
+        if direction == "sent":
+            afm = inv.get("counterpart_vat", "")
+            name = inv.get("counterpart_name", "")
+        else:
+            afm = inv.get("issuer_vat", "")
+            name = inv.get("issuer_name", "")
+
+        if name or not afm:
+            continue
+
+        afm_clean = afm.strip().replace("EL", "").replace("el", "")
+        if not _validate_afm(afm_clean):
+            continue
+
+        # Check cache
+        cached = _afm_cache_get(afm_clean)
+        if cached:
+            resolved_name = cached.get("name", "")
+        else:
+            # SOAP lookup (best-effort)
+            try:
+                info = _soap_lookup_afm(afm_clean)
+                _afm_cache_put(afm_clean, info)
+                resolved_name = info.get("name", "")
+            except Exception:
+                continue
+
+        # Write back to the correct field
+        if direction == "sent":
+            inv["counterpart_name"] = resolved_name
+        else:
+            inv["issuer_name"] = resolved_name
 
 
 def _upsert_invoice(conn, company_id: int, inv: dict, direction: str, synced_at: str):
@@ -244,8 +311,8 @@ def _upsert_invoice(conn, company_id: int, inv: dict, direction: str, synced_at:
             inv.get("series", ""),
             inv.get("aa", ""),
             inv.get("issueDate", ""),
-            inv.get("counterpart_vat", inv.get("issuer_vat", "")),
-            inv.get("counterpart_name", inv.get("issuer_name", "")),
+            inv.get("counterpart_vat", "") if direction == "sent" else inv.get("issuer_vat", ""),
+            inv.get("counterpart_name", "") if direction == "sent" else inv.get("issuer_name", ""),
             net,
             vat,
             gross,
@@ -307,6 +374,16 @@ async def list_invoices(
 
     with get_db() as conn:
         total = conn.execute(f"SELECT COUNT(*) as cnt FROM invoices WHERE {where}", params).fetchone()["cnt"]
+        summary = conn.execute(
+            f"""SELECT
+                COALESCE(SUM(net_amount), 0) as total_net,
+                COALESCE(SUM(vat_amount), 0) as total_vat,
+                COALESCE(SUM(total_amount), 0) as total_gross,
+                COALESCE(SUM(CASE WHEN direction='sent' THEN total_amount ELSE 0 END), 0) as sent_total,
+                COALESCE(SUM(CASE WHEN direction='received' THEN total_amount ELSE 0 END), 0) as received_total
+            FROM invoices WHERE {where}""",
+            params,
+        ).fetchone()
         rows = conn.execute(
             f"SELECT * FROM invoices WHERE {where} ORDER BY issue_date DESC, id DESC LIMIT ? OFFSET ?",
             params + [per_page, offset],
@@ -318,6 +395,13 @@ async def list_invoices(
         "page": page,
         "per_page": per_page,
         "pages": (total + per_page - 1) // per_page,
+        "summary": {
+            "net": summary["total_net"],
+            "vat": summary["total_vat"],
+            "gross": summary["total_gross"],
+            "sent": summary["sent_total"],
+            "received": summary["received_total"],
+        },
     }
 
 
@@ -427,6 +511,44 @@ async def download_report(report_id: int, user=Depends(get_current_user)):
     )
 
 
+# --- Email report ---
+
+class EmailReportReq(BaseModel):
+    to: list[str]
+    subject: str = ""
+    body: str = ""
+
+
+@app.post("/api/reports/{report_id}/email")
+async def email_report(report_id: int, req: EmailReportReq, user=Depends(get_current_user)):
+    """Email a report as attachment."""
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM report_history WHERE id=?", (report_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Report not found")
+
+    role = get_member_role(user["id"], row["company_id"])
+    if not role:
+        raise HTTPException(403, "Not a member of this company")
+
+    file_path = Path(row["file_path"])
+    if not file_path.exists():
+        raise HTTPException(404, "Report file not found")
+
+    if not req.to:
+        raise HTTPException(400, "No recipients specified")
+
+    subject = req.subject or f"Αναφορά {row['preset']} - {file_path.stem}"
+    body_html = req.body or f"<p>Επισυνάπτεται η αναφορά <b>{file_path.name}</b>.</p><p>Αποστολή από Timologia.</p>"
+
+    from email_sender import send_email
+    result = send_email(req.to, subject, body_html, attachments=[str(file_path)])
+    if not result.get("success"):
+        raise HTTPException(500, result.get("error", "Email send failed"))
+
+    return result
+
+
 # --- Schedule endpoints ---
 
 @app.post("/api/reports/schedules")
@@ -450,7 +572,14 @@ async def create_schedule(req: ScheduleReq, user=Depends(get_current_user)):
              req.cron, req.recipients, 1 if req.enabled else 0),
         )
         schedule_id = cur.lastrowid
-    return {"id": schedule_id, "cron": req.cron, "enabled": req.enabled}
+    return {
+        "id": schedule_id,
+        "preset": req.preset,
+        "params": params_json,
+        "cron": req.cron,
+        "recipients": req.recipients,
+        "enabled": req.enabled,
+    }
 
 
 @app.get("/api/reports/schedules")
@@ -500,6 +629,22 @@ async def update_schedule(schedule_id: int, req: ScheduleReq, user=Depends(get_c
     return {"ok": True}
 
 
+@app.patch("/api/reports/schedules/{schedule_id}")
+async def toggle_schedule(schedule_id: int, body: dict, user=Depends(get_current_user)):
+    """Toggle a report schedule enabled/disabled."""
+    with get_db() as conn:
+        existing = conn.execute("SELECT * FROM report_schedules WHERE id=?", (schedule_id,)).fetchone()
+    if not existing:
+        raise HTTPException(404, "Schedule not found")
+
+    require_role(user["id"], existing["company_id"], "accountant")
+
+    enabled = 1 if body.get("enabled") else 0
+    with get_db() as conn:
+        conn.execute("UPDATE report_schedules SET enabled=? WHERE id=?", (enabled, schedule_id))
+    return {"ok": True}
+
+
 @app.delete("/api/reports/schedules/{schedule_id}")
 async def delete_schedule(schedule_id: int, user=Depends(get_current_user)):
     """Delete a report schedule (requires accountant+ role)."""
@@ -513,6 +658,34 @@ async def delete_schedule(schedule_id: int, user=Depends(get_current_user)):
     with get_db() as conn:
         conn.execute("DELETE FROM report_schedules WHERE id=?", (schedule_id,))
     return {"ok": True}
+
+
+# --- AFM Lookup ---
+
+@app.get("/api/lookup-afm/{afm}")
+async def api_lookup_afm(afm: str, user=Depends(get_current_user)):
+    """Look up business details by AFM via AADE GSIS SOAP service."""
+    from agent import _validate_afm, _afm_cache_get, _afm_cache_put, _soap_lookup_afm
+
+    afm = afm.strip().replace("EL", "").replace("el", "")
+    if not _validate_afm(afm):
+        raise HTTPException(400, f"Μη έγκυρο ΑΦΜ: {afm}")
+
+    # Check cache
+    cached = _afm_cache_get(afm)
+    if cached:
+        cached["_source"] = "cache"
+        return cached
+
+    # SOAP lookup
+    try:
+        info = _soap_lookup_afm(afm)
+    except Exception as e:
+        raise HTTPException(502, f"Αποτυχία αναζήτησης ΑΑΔΕ: {e}")
+
+    _afm_cache_put(afm, info)
+    info["_source"] = "aade_live"
+    return info
 
 
 # --- Entry point ---

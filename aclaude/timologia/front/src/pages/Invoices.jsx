@@ -4,6 +4,8 @@ import { useCompany } from '../context/CompanyContext'
 import InvoiceTable from '../components/InvoiceTable'
 
 const LIMIT = 50
+const fmt = (n) =>
+  new Intl.NumberFormat('el-GR', { style: 'currency', currency: 'EUR' }).format(n || 0)
 
 export default function Invoices() {
   const { activeCompanyId } = useCompany()
@@ -11,6 +13,7 @@ export default function Invoices() {
   const [loading, setLoading] = useState(true)
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
+  const [summary, setSummary] = useState(null)
   const [direction, setDirection] = useState('')
   const [search, setSearch] = useState('')
   const [searchInput, setSearchInput] = useState('')
@@ -26,9 +29,7 @@ export default function Invoices() {
     const params = new URLSearchParams({
       company_id: activeCompanyId,
       page,
-      limit: LIMIT,
-      sort: sortKey,
-      sort_dir: sortDir,
+      per_page: LIMIT,
     })
     if (direction) params.set('direction', direction)
     if (search) params.set('search', search)
@@ -37,8 +38,9 @@ export default function Invoices() {
 
     apiJson(`/api/invoices?${params}`)
       .then((data) => {
-        setInvoices(data.invoices || data || [])
+        setInvoices(data.items || data.invoices || [])
         setTotal(data.total || 0)
+        setSummary(data.summary || null)
       })
       .catch(() => setInvoices([]))
       .finally(() => setLoading(false))
@@ -78,7 +80,7 @@ export default function Invoices() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold text-slate-800">Τιμολόγια</h1>
+      <h1 className="text-2xl font-bold text-slate-800">Παραστατικά</h1>
 
       {/* Filters */}
       <div className="rounded-lg bg-white p-4 shadow-sm">
@@ -137,6 +139,32 @@ export default function Invoices() {
         </div>
       </div>
 
+      {/* Summary */}
+      {summary && !loading && total > 0 && (
+        <div className="grid gap-3 sm:grid-cols-5">
+          <div className="rounded-lg bg-white p-4 shadow-sm">
+            <p className="text-xs font-medium text-gray-500">Πλήθος</p>
+            <p className="text-lg font-semibold text-slate-800">{total}</p>
+          </div>
+          <div className="rounded-lg bg-white p-4 shadow-sm">
+            <p className="text-xs font-medium text-gray-500">Καθαρή Αξία</p>
+            <p className="text-lg font-semibold text-slate-800">{fmt(summary.net)}</p>
+          </div>
+          <div className="rounded-lg bg-white p-4 shadow-sm">
+            <p className="text-xs font-medium text-gray-500">ΦΠΑ</p>
+            <p className="text-lg font-semibold text-slate-800">{fmt(summary.vat)}</p>
+          </div>
+          <div className="rounded-lg bg-blue-50 p-4 shadow-sm">
+            <p className="text-xs font-medium text-blue-600">Εκδοθέντα</p>
+            <p className="text-lg font-semibold text-blue-700">{fmt(summary.sent)}</p>
+          </div>
+          <div className="rounded-lg bg-orange-50 p-4 shadow-sm">
+            <p className="text-xs font-medium text-orange-600">Ληφθέντα</p>
+            <p className="text-lg font-semibold text-orange-700">{fmt(summary.received)}</p>
+          </div>
+        </div>
+      )}
+
       {/* Table */}
       <div className="rounded-lg bg-white shadow-sm">
         <InvoiceTable
@@ -151,7 +179,7 @@ export default function Invoices() {
         {total > LIMIT && (
           <div className="flex items-center justify-between border-t border-gray-100 px-4 py-3">
             <p className="text-sm text-gray-500">
-              Σελίδα {page} από {totalPages} ({total} τιμολόγια)
+              Σελίδα {page} από {totalPages} ({total} παραστατικά)
             </p>
             <div className="flex gap-1">
               <button

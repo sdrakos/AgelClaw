@@ -74,8 +74,12 @@ def is_due(schedule: dict) -> bool:
         except (ValueError, TypeError):
             pass
 
+    def _time_passed(hour, minute):
+        """Check if we're at or past the target time today."""
+        return (now.hour, now.minute) >= (hour, minute)
+
     if parsed["type"] == "daily":
-        if now.hour != parsed["hour"] or now.minute != parsed["minute"]:
+        if not _time_passed(parsed["hour"], parsed["minute"]):
             return False
         if last_run and last_run.date() == now.date():
             return False
@@ -84,7 +88,7 @@ def is_due(schedule: dict) -> bool:
     elif parsed["type"] == "weekly":
         if now.weekday() != parsed["weekday"]:
             return False
-        if now.hour != parsed["hour"] or now.minute != parsed["minute"]:
+        if not _time_passed(parsed["hour"], parsed["minute"]):
             return False
         if last_run and (now - last_run).total_seconds() < 86400:
             return False
@@ -93,7 +97,7 @@ def is_due(schedule: dict) -> bool:
     elif parsed["type"] == "monthly":
         if now.day != parsed["day"]:
             return False
-        if now.hour != parsed["hour"] or now.minute != parsed["minute"]:
+        if not _time_passed(parsed["hour"], parsed["minute"]):
             return False
         if last_run and last_run.month == now.month and last_run.year == now.year:
             return False
@@ -234,3 +238,23 @@ def check_and_enqueue_schedules(queue=None):
 def run_scheduled_report_sync(schedule_id: int):
     """Synchronous wrapper for RQ worker."""
     asyncio.run(run_scheduled_report(schedule_id))
+
+
+async def check_and_enqueue_schedules_async():
+    """Async version — runs due schedules directly (no Redis/RQ needed)."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM report_schedules WHERE enabled=1"
+        ).fetchall()
+
+    due_count = 0
+    for row in rows:
+        sched = dict(row)
+        if is_due(sched):
+            due_count += 1
+            try:
+                await run_scheduled_report(sched["id"])
+            except Exception as e:
+                logger.error("Schedule %d failed: %s", sched["id"], e, exc_info=True)
+
+    return due_count

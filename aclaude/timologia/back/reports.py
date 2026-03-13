@@ -34,6 +34,10 @@ PRESETS = {
         "label": "Ετήσια Επισκόπηση",
         "description": "Συνολική εικόνα τρέχοντος έτους",
     },
+    "expenses_by_supplier": {
+        "label": "Έξοδα ανά Προμηθευτή",
+        "description": "Ανάλυση εξόδων ομαδοποιημένα ανά προμηθευτή",
+    },
     "custom": {
         "label": "Προσαρμοσμένη",
         "description": "Επιλέξτε ημερομηνίες",
@@ -65,7 +69,23 @@ def get_preset_dates(preset: str, params: dict) -> tuple[str, str]:
         first = today.replace(month=1, day=1)
         return first.isoformat(), today.isoformat()
 
+    elif preset == "expenses_by_supplier":
+        # Support relative periods for scheduled reports
+        period = params.get("period")
+        if period:
+            return _resolve_relative_period(period, today)
+        df = params.get("date_from")
+        dt = params.get("date_to")
+        if df and dt:
+            return df, dt
+        first = today.replace(month=1, day=1)
+        return first.isoformat(), today.isoformat()
+
     elif preset == "custom":
+        # Support relative periods for scheduled reports
+        period = params.get("period")
+        if period:
+            return _resolve_relative_period(period, today)
         df = params.get("date_from")
         dt = params.get("date_to")
         if not df or not dt:
@@ -74,6 +94,35 @@ def get_preset_dates(preset: str, params: dict) -> tuple[str, str]:
 
     else:
         raise ValueError(f"Unknown preset: {preset}")
+
+
+def _resolve_relative_period(period: str, today: date) -> tuple[str, str]:
+    """Resolve relative period name to (date_from, date_to)."""
+    import calendar
+
+    if period == "today":
+        d = today.isoformat()
+        return d, d
+    elif period == "yesterday":
+        d = (today - timedelta(days=1)).isoformat()
+        return d, d
+    elif period == "last_7_days":
+        return (today - timedelta(days=6)).isoformat(), today.isoformat()
+    elif period == "last_30_days":
+        return (today - timedelta(days=29)).isoformat(), today.isoformat()
+    elif period == "current_month":
+        return today.replace(day=1).isoformat(), today.isoformat()
+    elif period == "previous_month":
+        last_day_prev = today.replace(day=1) - timedelta(days=1)
+        first_day_prev = last_day_prev.replace(day=1)
+        return first_day_prev.isoformat(), last_day_prev.isoformat()
+    elif period == "current_quarter":
+        q_month = ((today.month - 1) // 3) * 3 + 1
+        return today.replace(month=q_month, day=1).isoformat(), today.isoformat()
+    elif period == "current_year":
+        return today.replace(month=1, day=1).isoformat(), today.isoformat()
+    else:
+        raise ValueError(f"Unknown period: {period}")
 
 
 async def generate_report(company_id: int, user_id: int, preset: str, params: dict) -> dict:
@@ -94,9 +143,16 @@ async def generate_report(company_id: int, user_id: int, preset: str, params: di
     from aade_client import MyDataClient
     client = MyDataClient(aade_uid, aade_key, company["afm"], env=company["aade_env"])
 
+    # Direction filter: "all" (default), "sent", "received"
+    direction_filter = params.get("direction", "all")
+
     try:
-        income = await client.get_sent_invoices(date_from=date_from, date_to=date_to)
-        expenses = await client.get_received_invoices(date_from=date_from, date_to=date_to)
+        income = []
+        expenses = []
+        if direction_filter in ("all", "sent"):
+            income = await client.get_sent_invoices(date_from=date_from, date_to=date_to)
+        if direction_filter in ("all", "received"):
+            expenses = await client.get_received_invoices(date_from=date_from, date_to=date_to)
     finally:
         await client.close()
 
@@ -104,13 +160,22 @@ async def generate_report(company_id: int, user_id: int, preset: str, params: di
     income = [i for i in income if i.get("mark")]
     expenses = [e for e in expenses if e.get("mark")]
 
+    # Resolve counterpart names (supplier names) from AFM via GSIS
+    if income:
+        _resolve_names(income, "sent")
+    if expenses:
+        _resolve_names(expenses, "received")
+
     # Generate Excel
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"report_{company['afm']}_{preset}_{timestamp}.xlsx"
     file_path = REPORTS_DIR / filename
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    _generate_xlsx(file_path, income, expenses, company["afm"], date_from, date_to)
+    if preset == "expenses_by_supplier":
+        _generate_supplier_xlsx(file_path, expenses, company["afm"], date_from, date_to)
+    else:
+        _generate_xlsx(file_path, income, expenses, company["afm"], date_from, date_to)
 
     # Log to report_history
     with get_db() as conn:
@@ -472,6 +537,147 @@ def _group_by_type(invoices: list) -> dict:
         groups[inv_type]["vat"] += _to_float(inv.get("totalVatAmount", 0))
         groups[inv_type]["gross"] += _to_float(inv.get("totalGrossValue", 0))
     return dict(groups)
+
+
+def _resolve_names(invoices: list, direction: str):
+    """Resolve counterpart/issuer names from AFM via GSIS SOAP + cache."""
+    try:
+        from agent import _validate_afm, _afm_cache_get, _afm_cache_put, _soap_lookup_afm
+    except Exception:
+        return
+
+    for inv in invoices:
+        if direction == "sent":
+            afm = inv.get("counterpart_vat", "")
+            name = inv.get("counterpart_name", "")
+        else:
+            afm = inv.get("issuer_vat", "")
+            name = inv.get("issuer_name", "")
+
+        if name or not afm:
+            continue
+
+        afm_clean = afm.strip().replace("EL", "").replace("el", "")
+        if not _validate_afm(afm_clean):
+            continue
+
+        cached = _afm_cache_get(afm_clean)
+        if cached:
+            resolved = cached.get("name", "")
+        else:
+            try:
+                info = _soap_lookup_afm(afm_clean)
+                _afm_cache_put(afm_clean, info)
+                resolved = info.get("name", "")
+            except Exception:
+                continue
+
+        if direction == "sent":
+            inv["counterpart_name"] = resolved
+        else:
+            inv["issuer_name"] = resolved
+
+
+def _group_by_supplier(expenses: list) -> dict:
+    """Group expenses by supplier AFM, summing net/vat/gross."""
+    groups = defaultdict(lambda: {"name": "", "count": 0, "net": 0.0, "vat": 0.0, "gross": 0.0, "invoices": []})
+    for inv in expenses:
+        afm = inv.get("issuer_vat", "unknown")
+        name = inv.get("issuer_name", "")
+        groups[afm]["count"] += 1
+        if name and not groups[afm]["name"]:
+            groups[afm]["name"] = name
+        groups[afm]["net"] += _to_float(inv.get("totalNetValue", 0))
+        groups[afm]["vat"] += _to_float(inv.get("totalVatAmount", 0))
+        groups[afm]["gross"] += _to_float(inv.get("totalGrossValue", 0))
+        groups[afm]["invoices"].append(inv)
+    return dict(groups)
+
+
+def _generate_supplier_xlsx(path: Path, expenses: list,
+                            afm: str, date_from: str, date_to: str) -> Path:
+    """Generate Excel with expenses grouped by supplier."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    wb = Workbook()
+
+    # Sheet 1: Σύνοψη ανά Προμηθευτή
+    ws = wb.active
+    ws.title = "Ανά Προμηθευτή"
+
+    cols = [
+        ("ΑΦΜ Προμηθευτή", 16),
+        ("Επωνυμία", 36),
+        ("Πλήθος", 10),
+        ("Καθαρή Αξία", 16),
+        ("ΦΠΑ", 14),
+        ("Μικτή Αξία", 16),
+    ]
+    for i, (title, width) in enumerate(cols, 1):
+        ws.column_dimensions[get_column_letter(i)].width = width
+        cell = ws.cell(row=1, column=i, value=title)
+        cell.fill = HEADER_FILL
+        cell.font = HEADER_FONT
+        cell.alignment = Alignment(horizontal="center")
+        cell.border = THIN_BORDER
+
+    supplier_groups = _group_by_supplier(expenses)
+    # Sort by gross descending
+    sorted_suppliers = sorted(supplier_groups.items(), key=lambda x: x[1]["gross"], reverse=True)
+
+    for row_idx, (supplier_afm, data) in enumerate(sorted_suppliers, 2):
+        values = [supplier_afm, data["name"], data["count"], data["net"], data["vat"], data["gross"]]
+        for col_idx, val in enumerate(values, 1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=val)
+            cell.border = THIN_BORDER
+            if col_idx >= 4:
+                cell.number_format = CURRENCY_FMT
+                cell.alignment = Alignment(horizontal="right")
+            if row_idx % 2 == 0:
+                cell.fill = ALT_FILL
+
+    # Totals
+    if sorted_suppliers:
+        total_row = len(sorted_suppliers) + 2
+        ws.cell(row=total_row, column=2, value="ΣΥΝΟΛΟ").font = TOTAL_FONT
+        ws.cell(row=total_row, column=3, value=sum(d["count"] for d in supplier_groups.values())).font = TOTAL_FONT
+        for col_idx in (4, 5, 6):
+            col_letter = get_column_letter(col_idx)
+            cell = ws.cell(
+                row=total_row, column=col_idx,
+                value=f"=SUM({col_letter}2:{col_letter}{total_row - 1})",
+            )
+            cell.number_format = CURRENCY_FMT
+            cell.font = TOTAL_FONT
+            cell.fill = TOTAL_FILL
+            cell.border = THIN_BORDER
+            cell.alignment = Alignment(horizontal="right")
+
+    ws.freeze_panes = "A2"
+
+    # Sheet 2: Αναλυτικά Έξοδα
+    ws_detail = wb.create_sheet("Αναλυτικά")
+    _write_invoice_sheet(ws_detail, expenses, "expenses")
+
+    # Sheet 3: Metadata
+    ws_meta = wb.create_sheet("Στοιχεία")
+    ws_meta.column_dimensions["A"].width = 28
+    ws_meta.column_dimensions["B"].width = 30
+    _section_header(ws_meta, 1, "Στοιχεία Αναφοράς")
+    ws_meta.cell(row=2, column=1, value="ΑΦΜ:").font = LABEL_FONT
+    ws_meta.cell(row=2, column=2, value=afm)
+    ws_meta.cell(row=3, column=1, value="Περίοδος:").font = LABEL_FONT
+    ws_meta.cell(row=3, column=2, value=f"{date_from} — {date_to}")
+    ws_meta.cell(row=4, column=1, value="Ημ/νία δημιουργίας:").font = LABEL_FONT
+    ws_meta.cell(row=4, column=2, value=datetime.now().strftime("%Y-%m-%d %H:%M"))
+    ws_meta.cell(row=5, column=1, value="Προμηθευτές:").font = LABEL_FONT
+    ws_meta.cell(row=5, column=2, value=str(len(supplier_groups)))
+    ws_meta.cell(row=6, column=1, value="Σύνολο Παραστατικών:").font = LABEL_FONT
+    ws_meta.cell(row=6, column=2, value=str(len(expenses)))
+
+    wb.save(str(path))
+    return path
 
 
 def _to_float(val) -> float:

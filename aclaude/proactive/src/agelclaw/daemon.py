@@ -1907,27 +1907,32 @@ def _cleanup_stale_tasks():
         log.error(f"Startup cleanup failed: {e}")
 
 
-def _recover_missed_tasks():
+def _recover_missed_tasks() -> int:
     """Detect recurring tasks that were missed while daemon was down and trigger them.
 
     When the daemon restarts after a crash, recurring tasks whose next_run_at
     is in the past would normally just get rescheduled to the next slot without
     ever executing. This function sets their next_run_at to now so the first
     scheduler cycle picks them up and actually runs them.
+
+    Returns the number of recovered tasks (0 if none).
     """
     try:
         now = datetime.now()
         with memory._conn() as conn:
+            # Also check non-recurring tasks that were due while daemon was down
             missed = conn.execute(
                 "SELECT id, title, recurring_cron, next_run_at FROM tasks "
-                "WHERE status='pending' AND recurring_cron IS NOT NULL "
-                "AND recurring_cron != '' AND next_run_at IS NOT NULL "
+                "WHERE status='pending' AND next_run_at IS NOT NULL "
                 "AND next_run_at <= ?",
                 (now.isoformat(),)
             ).fetchall()
 
         if not missed:
-            return
+            log.info("Missed task recovery: no overdue tasks found")
+            return 0
+
+        log.info(f"Missed task recovery: found {len(missed)} overdue task(s), checking...")
 
         # Grace period: only recover tasks missed by more than 2 minutes
         # (avoids double-run if daemon restarts right at the scheduled time)
@@ -1938,21 +1943,28 @@ def _recover_missed_tasks():
                 due_at = datetime.fromisoformat(t["next_run_at"])
                 missed_by = (now - due_at).total_seconds()
                 if missed_by > GRACE_SECONDS:
-                    # Set next_run_at to now so it gets picked up immediately
-                    memory.update_task(t["id"], next_run_at=now.isoformat())
+                    # Set next_run_at to 30 seconds in the future so get_next_due_time() sees it
+                    recovery_time = (now + timedelta(seconds=30)).isoformat()
+                    memory.update_task(t["id"], next_run_at=recovery_time)
                     recovered.append(t)
                     log.warning(
                         f"Missed task recovery: Task #{t['id']} '{t['title']}' "
-                        f"(cron: {t['recurring_cron']}) was due at {t['next_run_at']}, "
+                        f"(cron: {t.get('recurring_cron', 'none')}) was due at {t['next_run_at']}, "
                         f"missed by {missed_by:.0f}s — scheduling for immediate execution"
                     )
+                else:
+                    log.info(f"Missed task recovery: Task #{t['id']} '{t['title']}' missed by only {missed_by:.0f}s (< {GRACE_SECONDS}s grace) — skipping")
             except (ValueError, TypeError) as e:
                 log.error(f"Missed task recovery: bad date for task #{t['id']}: {e}")
 
         if recovered:
             log.info(f"Missed task recovery: {len(recovered)} task(s) will run immediately")
+        else:
+            log.info("Missed task recovery: all overdue tasks within grace period, none recovered")
+        return len(recovered)
     except Exception as e:
-        log.error(f"Missed task recovery failed: {e}")
+        log.error(f"Missed task recovery failed: {e}", exc_info=True)
+        return 0
 
 
 @asynccontextmanager
@@ -1961,7 +1973,11 @@ async def lifespan(app: FastAPI):
     _cleanup_stale_tasks()
 
     # Recover recurring tasks that were missed while daemon was down
-    _recover_missed_tasks()
+    recovered_count = _recover_missed_tasks()
+    if recovered_count > 0:
+        # Wake the scheduler immediately so recovered tasks run on first cycle
+        wake_event.set()
+        log.info(f"Wake event set: {recovered_count} recovered task(s) will trigger immediate cycle")
 
     # Start the scheduler and watchdog as background tasks
     scheduler_task = asyncio.create_task(scheduler_loop())

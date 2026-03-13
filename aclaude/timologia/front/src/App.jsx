@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard'
 import Chat from './pages/Chat'
 import Invoices from './pages/Invoices'
 import Reports from './pages/Reports'
+import Analytics from './pages/Analytics'
 import Settings from './pages/Settings'
 
 function ProtectedRoute({ children }) {
@@ -21,6 +22,7 @@ export default function App() {
           <Route index element={<Dashboard />} />
           <Route path="chat" element={<Chat />} />
           <Route path="invoices" element={<Invoices />} />
+          <Route path="analytics" element={<Analytics />} />
           <Route path="reports" element={<Reports />} />
           <Route path="settings" element={<Settings />} />
         </Route>

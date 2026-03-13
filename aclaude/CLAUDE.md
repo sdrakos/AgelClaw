@@ -364,7 +364,8 @@ timologia/
 │   ├── agent.py                  # OpenAI Agents SDK: 11 tools, TimologiaContext, create_agent()
 │   ├── aade_client.py            # MyDataClient (adapted from MCP server)
 │   ├── invoice_xml.py            # lxml XML builder + VAT rates
-│   ├── reports.py                # 5 presets, 3-sheet Excel (openpyxl)
+│   ├── analytics.py              # GET /api/analytics — 10 aggregation sections (period comparison, forecast, charts)
+│   ├── reports.py                # 6 presets (incl. expenses_by_supplier), relative periods, direction filter, Excel (openpyxl)
 │   ├── email_sender.py           # Microsoft Graph email
 │   ├── jobs.py                   # Cron parser + RQ job runner
 │   ├── worker.py                 # RQ worker + scheduler loop
@@ -375,7 +376,7 @@ timologia/
 ├── front/
 │   ├── src/
 │   │   ├── App.jsx               # Routes + ProtectedRoute
-│   │   ├── pages/                # Login, Dashboard, Chat, Invoices, Reports, Settings
+│   │   ├── pages/                # Login, Dashboard, Chat, Invoices, Analytics, Reports, Settings
 │   │   ├── components/           # Layout, ChatPanel, ToolActivity, ConfirmationCard, CompanySelector, InvoiceTable
 │   │   ├── context/CompanyContext.jsx
 │   │   └── lib/                  # api.js (fetch + SSE), auth.js (JWT localStorage)
@@ -410,6 +411,18 @@ timologia/
 **AADE 429 rate limit retry.** `aade_client.py` retries up to 4 times on HTTP 429 responses, parsing "Try again in N seconds" from the JSON error message. Both `_get` and `_post` methods have retry logic.
 
 **Register auto-login.** `register_user()` returns `{token, user}` (same format as login) so frontend auto-logs in after registration.
+
+**Analytics dashboard.** `analytics.py` provides `GET /api/analytics?company_id=X` — fetches all invoices once, aggregates in Python. Returns 10 sections: period_comparison (month/week/YoY), daily_revenue (30 days), vat_breakdown (pie), top_suppliers, top_customers, avg_invoice_by_month, month_forecast (linear projection), seasonality, weekday_revenue, monthly_evolution. Frontend uses Recharts (+ `react-is` peer dep). Route: `/analytics`.
+
+**Invoice summary stats.** `/api/invoices` endpoint returns `summary` object (net, vat, gross, sent_count, received_count) alongside invoices. Frontend shows 5 stat cards above the invoice table.
+
+**Multi-company frontend.** CompanySelector has "+" button to add new companies with AADE credentials. CompanyContext exposes `addCompany()` and `fetchCompanies()`.
+
+**Terminology: Παραστατικά.** UI uses "Παραστατικά" (not "Τιμολόγια") throughout — covers both invoices and receipts. Agent instructions also updated.
+
+**Scheduled report custom params.** Schedule form shows extra fields (Period + Direction) when preset is `custom` or `expenses_by_supplier`. Periods are relative (today, yesterday, last 7/30 days, current/previous month, quarter, year) — resolved dynamically at execution time via `_resolve_relative_period()`. Direction filter (`all`/`sent`/`received`) controls which AADE API calls are made.
+
+**RQ SimpleWorker on Windows.** `worker.py` uses `SimpleWorker` (in-process) on Windows instead of `Worker` (fork-based) to avoid `os.fork()` crash. Schedule timing uses `>=` comparison instead of exact minute match.
 
 ## Configuration (config.yaml)
 

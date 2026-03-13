@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { apiJson } from '../lib/api'
 import { useCompany } from '../context/CompanyContext'
 import ChatPanel from '../components/ChatPanel'
@@ -9,13 +9,14 @@ export default function Chat() {
   const [activeSession, setActiveSession] = useState(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [loadingSessions, setLoadingSessions] = useState(false)
+  const defaultSessionRef = useRef(null)
 
   useEffect(() => {
     if (!activeCompanyId) return
     setLoadingSessions(true)
     apiJson(`/api/chat/sessions?company_id=${activeCompanyId}`)
       .then((data) => {
-        const list = data.sessions || data || []
+        const list = data.items || data.sessions || data || []
         setSessions(list)
         if (!activeSession && list.length > 0) {
           setActiveSession(list[0].id)
@@ -98,9 +99,14 @@ export default function Chat() {
                       : 'text-slate-600 hover:bg-gray-50'
                   }`}
                 >
-                  <p className="truncate">{s.title || 'Συζήτηση'}</p>
+                  <p className="truncate">{s.last_message || s.title || 'Συζήτηση'}</p>
                   <p className="mt-0.5 text-xs text-gray-400">
-                    {s.created_at ? new Date(s.created_at).toLocaleDateString('el-GR') : ''}
+                    {s.message_count ? `${s.message_count} μηνύματα · ` : ''}
+                    {s.updated_at
+                      ? new Date(s.updated_at).toLocaleDateString('el-GR')
+                      : s.created_at
+                        ? new Date(s.created_at).toLocaleDateString('el-GR')
+                        : ''}
                   </p>
                 </button>
               ))
@@ -113,7 +119,10 @@ export default function Chat() {
       <div className="flex-1 rounded-lg bg-white shadow-sm overflow-hidden">
         <ChatPanel
           companyId={activeCompanyId}
-          sessionId={activeSession || `session_${Date.now()}`}
+          sessionId={activeSession || (() => {
+            if (!defaultSessionRef.current) defaultSessionRef.current = `new_${Date.now()}`
+            return defaultSessionRef.current
+          })()}
         />
       </div>
     </div>

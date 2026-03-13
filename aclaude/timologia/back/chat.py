@@ -22,7 +22,7 @@ router = APIRouter(prefix="/api/chat")
 class ChatRequest(BaseModel):
     company_id: int
     message: str
-    session_id: int | None = None
+    session_id: str | int | None = None
 
 
 class ConfirmRequest(BaseModel):
@@ -67,7 +67,7 @@ def _build_context(user: dict, company_id: int) -> TimologiaContext:
     )
 
 
-def _get_or_create_session(user_id: int, company_id: int, session_id: int | None) -> tuple[int, list]:
+def _get_or_create_session(user_id: int, company_id: int, session_id: str | int | None) -> tuple[int, list]:
     """Return (session_id, messages_list). Creates new session if needed."""
     with get_db() as conn:
         if session_id:
@@ -153,7 +153,8 @@ async def chat(req: ChatRequest, user=Depends(get_current_user)):
             # Check for confirmation actions in tool outputs
             confirmation = _check_for_confirmation(result)
 
-            # Stream tool call events (for UI display)
+            # Stream tool call events + detect file outputs (for UI display)
+            file_attachments = []
             for item in getattr(result, "new_items", []):
                 item_type = getattr(item, "type", "")
                 if item_type == "tool_call_item":
@@ -163,6 +164,23 @@ async def chat(req: ChatRequest, user=Depends(get_current_user)):
                         "tool": tool_name,
                         "arguments": tool_args[:500],
                     })
+                # Check tool output for file references (report generation)
+                output = getattr(item, "output", None)
+                if output and isinstance(output, str):
+                    try:
+                        out_data = json.loads(output)
+                        if isinstance(out_data, dict) and out_data.get("filename") and out_data.get("id"):
+                            file_attachments.append({
+                                "report_id": out_data["id"],
+                                "filename": out_data["filename"],
+                                "download_url": f"/api/reports/download/{out_data['id']}",
+                            })
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+            # Send file attachment events
+            for fa in file_attachments:
+                yield _sse_event("file", fa)
 
             # If there's a confirmation action, store it and send event
             if confirmation:
@@ -346,6 +364,20 @@ async def reject_action(action_id: int, req: ConfirmRequest, user=Depends(get_cu
     return {"ok": True, "status": "rejected"}
 
 
+@router.get("/sessions/{session_id}/messages")
+async def get_session_messages(session_id: int, user=Depends(get_current_user)):
+    """Load messages for a specific chat session."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT messages FROM chat_sessions WHERE id=? AND user_id=?",
+            (session_id, user["id"]),
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, "Session not found")
+    messages = json.loads(row["messages"])
+    return {"session_id": session_id, "messages": messages}
+
+
 @router.get("/sessions")
 async def list_sessions(
     company_id: int = Query(...),
@@ -371,22 +403,18 @@ async def list_sessions(
             (user["id"], company_id, per_page, offset),
         ).fetchall()
 
-    sessions = []
-    for r in rows:
-        d = dict(r)
-        # Get last message preview
-        full = conn.execute("SELECT messages FROM chat_sessions WHERE id=?", (r["id"],))
-        # Re-query for messages (we're outside the context manager, need a fresh one)
-        sessions.append(d)
+    sessions = [dict(r) for r in rows]
 
-    # Enrich with message count + last message preview
+    # Enrich with message count + first user message as title
     with get_db() as conn:
         for s in sessions:
             row = conn.execute("SELECT messages FROM chat_sessions WHERE id=?", (s["id"],)).fetchone()
             if row:
                 msgs = json.loads(row["messages"])
                 s["message_count"] = len(msgs)
-                s["last_message"] = msgs[-1]["content"][:100] if msgs else ""
+                # Use first user message as title
+                first_user = next((m["content"] for m in msgs if m.get("role") == "user"), "")
+                s["last_message"] = first_user[:80] if first_user else ""
             else:
                 s["message_count"] = 0
                 s["last_message"] = ""

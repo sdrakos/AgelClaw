@@ -17,8 +17,14 @@ if not _fernet_key:
     _fernet_key = Fernet.generate_key().decode()
     env_file = BASE_DIR / ".env"
     if env_file.exists():
-        with open(env_file, "a") as f:
-            f.write(f"\nFERNET_KEY={_fernet_key}\n")
+        # Replace empty FERNET_KEY= line or append
+        content = env_file.read_text()
+        if "FERNET_KEY=" in content:
+            content = content.replace("FERNET_KEY=", f"FERNET_KEY={_fernet_key}", 1)
+            env_file.write_text(content)
+        else:
+            with open(env_file, "a") as f:
+                f.write(f"\nFERNET_KEY={_fernet_key}\n")
 FERNET = Fernet(_fernet_key.encode() if isinstance(_fernet_key, str) else _fernet_key)
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")

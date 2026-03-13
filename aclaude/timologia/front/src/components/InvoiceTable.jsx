@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import { apiJson } from '../lib/api'
 
 const fmt = (n) =>
   new Intl.NumberFormat('el-GR', { style: 'currency', currency: 'EUR' }).format(n || 0)
@@ -7,6 +8,7 @@ const COLUMNS = [
   { key: 'issue_date', label: 'Ημ/νία' },
   { key: 'series_aa', label: 'Σειρά/ΑΑ' },
   { key: 'type_description', label: 'Τύπος' },
+  { key: 'counterpart_afm', label: 'ΑΦΜ' },
   { key: 'counterpart_name', label: 'Αντισυμβαλλόμενος' },
   { key: 'net_amount', label: 'Καθαρό', align: 'right' },
   { key: 'vat_amount', label: 'ΦΠΑ', align: 'right' },
@@ -15,6 +17,49 @@ const COLUMNS = [
 ]
 
 export default function InvoiceTable({ invoices, loading, sortKey, sortDir, onSort }) {
+  const [afmNames, setAfmNames] = useState({})
+  const lookedUp = useRef(new Set())
+
+  // Auto-lookup AFMs that have no counterpart_name
+  useEffect(() => {
+    if (!invoices || invoices.length === 0) return
+
+    const afmsToLookup = new Set()
+    for (const inv of invoices) {
+      const afm = inv.counterpart_afm
+      if (afm && !inv.counterpart_name && !afmNames[afm] && !lookedUp.current.has(afm)) {
+        afmsToLookup.add(afm)
+      }
+    }
+
+    if (afmsToLookup.size === 0) return
+
+    // Mark as in-progress to avoid duplicate calls
+    for (const afm of afmsToLookup) {
+      lookedUp.current.add(afm)
+    }
+
+    // Lookup each AFM
+    for (const afm of afmsToLookup) {
+      apiJson(`/api/lookup-afm/${afm}`)
+        .then((data) => {
+          if (data.name) {
+            setAfmNames((prev) => ({ ...prev, [afm]: data.name }))
+          }
+        })
+        .catch(() => {})
+    }
+  }, [invoices])
+
+  const getCounterpartDisplay = (inv) => {
+    const name = inv.counterpart_name || afmNames[inv.counterpart_afm] || ''
+    const afm = inv.counterpart_afm || ''
+    if (name && afm) return `${name} (${afm})`
+    if (name) return name
+    if (afm) return afm
+    return '-'
+  }
+
   const handleSort = (key) => {
     if (onSort) onSort(key)
   }
@@ -34,7 +79,7 @@ export default function InvoiceTable({ invoices, loading, sortKey, sortDir, onSo
   if (!invoices || invoices.length === 0) {
     return (
       <div className="flex h-48 items-center justify-center text-gray-400">
-        Δεν βρέθηκαν τιμολόγια
+        Δεν βρέθηκαν παραστατικά
       </div>
     )
   }
@@ -72,8 +117,11 @@ export default function InvoiceTable({ invoices, loading, sortKey, sortDir, onSo
               <td className="px-4 py-3 text-slate-600 max-w-[200px] truncate">
                 {inv.type_description || inv.invoice_type || '-'}
               </td>
-              <td className="px-4 py-3 text-slate-600 max-w-[200px] truncate">
-                {inv.counterpart_name || inv.counterpart_afm || '-'}
+              <td className="px-4 py-3 text-slate-600 font-mono text-xs">{inv.counterpart_afm || '-'}</td>
+              <td className="px-4 py-3 text-slate-600 max-w-[250px]">
+                <div className="truncate" title={getCounterpartDisplay(inv)}>
+                  {getCounterpartDisplay(inv)}
+                </div>
               </td>
               <td className="px-4 py-3 text-right font-medium text-slate-700">{fmt(inv.net_amount)}</td>
               <td className="px-4 py-3 text-right text-slate-600">{fmt(inv.vat_amount)}</td>
