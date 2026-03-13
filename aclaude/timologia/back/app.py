@@ -235,6 +235,12 @@ async def list_members(company_id: int, user=Depends(get_current_user)):
             "WHERE cm.company_id=? ORDER BY u.name",
             (company_id,),
         ).fetchall()
+        # Hide platform admins from non-admin users
+        if user["role"] != "admin":
+            return [dict(r) for r in rows if r["email"] not in
+                    [a["email"] for a in conn.execute(
+                        "SELECT email FROM users WHERE role='admin'"
+                    ).fetchall()]]
     return [dict(r) for r in rows]
 
 @app.post("/api/companies/{company_id}/members")
