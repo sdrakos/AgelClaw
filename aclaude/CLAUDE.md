@@ -316,6 +316,101 @@ proactive/src/agelclaw/           # Python package (pip install)
 
 **CLAUDECODE env var cleanup.** Both `agent_run.py` and `daemon.py`'s `run_daemon()` call `os.environ.pop("CLAUDECODE", None)` at startup. Claude Code sets `CLAUDECODE=1` in its terminal environment; child processes inherit it. `claude.exe` v2.1.71+ checks for this var and refuses to launch ("nested session" error, exit code 1 immediately). Without the pop, any daemon or subagent started from a Claude Code terminal fails silently. The daemon also removes `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION`, `CLAUDE_CODE_TASK_ID`, and `CLAUDE_CODE_CONVERSATION_ID`.
 
+## Timologia — Multi-User AADE Invoicing App
+
+Standalone web app at `timologia/` — separate from AgelClaw. Multi-user invoicing for Greek businesses via AADE myDATA API, with AI chat assistant (OpenAI Agents SDK).
+
+### Architecture
+
+```
+Browser (React 19 + Vite + TailwindCSS v4)
+    │
+    ▼
+FastAPI (:8100)  ←→  Redis  ←→  RQ Worker
+    │                                │
+    ▼                                ▼
+SQLite (users, companies,      Scheduled reports
+ invoices cache, chat,         (Excel + email)
+ pending_actions, schedules)
+    │
+    ▼
+AADE myDATA API (dev/prod)
+```
+
+### Running Locally
+
+```bash
+# Backend
+cd timologia/back
+pip install -r requirements.txt
+python app.py                     # → http://localhost:8100
+
+# Frontend (separate terminal)
+cd timologia/front
+npm install --legacy-peer-deps    # Tailwind v4 + Vite 8
+npm run dev                       # → http://localhost:5173 (proxies /api→:8100)
+```
+
+### Project Structure
+
+```
+timologia/
+├── back/
+│   ├── app.py                    # FastAPI app: auth, companies, invoices, reports, schedules
+│   ├── auth.py                   # JWT (HS256, 24h) + bcrypt + role hierarchy
+│   ├── config.py                 # Env vars, Fernet auto-gen, paths
+│   ├── db.py                     # SQLite WAL + migration runner
+│   ├── chat.py                   # SSE streaming + OpenAI Runner + confirmation flow
+│   ├── agent.py                  # OpenAI Agents SDK: 11 tools, TimologiaContext, create_agent()
+│   ├── aade_client.py            # MyDataClient (adapted from MCP server)
+│   ├── invoice_xml.py            # lxml XML builder + VAT rates
+│   ├── reports.py                # 5 presets, 3-sheet Excel (openpyxl)
+│   ├── email_sender.py           # Microsoft Graph email
+│   ├── jobs.py                   # Cron parser + RQ job runner
+│   ├── worker.py                 # RQ worker + scheduler loop
+│   ├── migrations/001_init.sql   # 8 tables
+│   ├── data/timologia.db         # SQLite database (auto-created)
+│   ├── .env                      # Credentials (JWT_SECRET, FERNET_KEY, OPENAI_API_KEY, etc.)
+│   └── requirements.txt
+├── front/
+│   ├── src/
+│   │   ├── App.jsx               # Routes + ProtectedRoute
+│   │   ├── pages/                # Login, Dashboard, Chat, Invoices, Reports, Settings
+│   │   ├── components/           # Layout, ChatPanel, ToolActivity, ConfirmationCard, CompanySelector, InvoiceTable
+│   │   ├── context/CompanyContext.jsx
+│   │   └── lib/                  # api.js (fetch + SSE), auth.js (JWT localStorage)
+│   ├── vite.config.js            # Proxy /api→:8100
+│   └── package.json
+├── ecosystem.config.js           # PM2: api + worker
+└── nginx.conf                    # Reverse proxy + SSE
+```
+
+### Key Design Decisions (Timologia-specific)
+
+**OpenAI Agents SDK (`openai-agents`).** Agent uses `gpt-4.1`, `@function_tool` decorators, `RunContextWrapper[TimologiaContext]` for context passing. Strict JSON schema: tool params must be concrete types (no `list[dict]` — use `str` + `json.loads()`). Agent has 11 tools total.
+
+**No Markdown in agent output.** Agent rule 13 prohibits `**`, `##`, `###`, `---`, triple backticks, and Markdown tables. Use plain text with dashes for lists and spaces for alignment.
+
+**Dry-run confirmation pattern.** Write tools (`send_invoice`, `cancel_invoice`, `update_company_settings`) always run with `dry_run=True` first → return preview + `original_args`. Frontend shows `ConfirmationCard`. On confirm, backend replays with `dry_run=False`. Pending actions expire after 5 minutes.
+
+**Fernet credential encryption.** AADE `user_id` and `subscription_key` encrypted at rest with Fernet. Key auto-generated on first run and written to `.env` (replaces empty `FERNET_KEY=` line, not append — prevents `python-dotenv` reading the wrong duplicate).
+
+**Invoice local cache.** Invoices cached in SQLite on fetch, refreshed if last sync >15 min. `_sync_invoices()` runs as background `asyncio.create_task` on `/api/invoices` requests.
+
+**Role hierarchy.** Global roles: `admin`/`user`. Per-company roles: `owner`/`accountant`/`viewer`. `admin` bypasses membership. `require_role()` checks hierarchy.
+
+**SSE chat events.** `text`, `tool_call`, `file`, `confirmation`, `error`, `done`. Frontend parses SSE stream in `sseStream()` utility. The `file` event delivers Excel download cards for report tool outputs.
+
+**Excel file download in chat.** When the agent calls `generate_report_tool`, `chat.py` detects the tool output (JSON with `filename` + `id` fields in `tool_call_output_item`), yields `file` SSE events with `report_id`, `filename`, and `download_url`. Frontend renders a green Excel download button card. `handleDownload` uses authenticated `fetch` → blob → programmatic download.
+
+**Email reports.** `email_report` tool (tool 11) sends report Excel as email attachment via Microsoft Graph (`info@timologia.me`). Also available from Reports page via email modal. Uses `email_sender.py` with MSAL client credentials flow. Env vars: `OUTLOOK_CLIENT_ID`, `OUTLOOK_CLIENT_SECRET`, `OUTLOOK_TENANT_ID`, `OUTLOOK_USER_EMAIL`.
+
+**Chat session persistence.** Sessions stored in `chat_sessions` SQLite table with full message JSON. `realSessionId` ref tracks backend-returned integer session ID across messages. Session list shows first user message as title. `GET /api/chat/sessions/{id}/messages` loads history.
+
+**AADE 429 rate limit retry.** `aade_client.py` retries up to 4 times on HTTP 429 responses, parsing "Try again in N seconds" from the JSON error message. Both `_get` and `_post` methods have retry logic.
+
+**Register auto-login.** `register_user()` returns `{token, user}` (same format as login) so frontend auto-logs in after registration.
+
 ## Configuration (config.yaml)
 
 ```yaml
