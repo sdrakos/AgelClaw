@@ -1,4 +1,5 @@
 """FastAPI application — main entry point."""
+import os
 import json
 import asyncio
 from datetime import datetime, timedelta
@@ -1091,6 +1092,59 @@ async def admin_list_companies(user=Depends(get_current_user)):
             "GROUP BY c.id ORDER BY c.name"
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# --- Telegram ---
+
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_BOT_USERNAME = os.environ.get("TELEGRAM_BOT_USERNAME", "TimologiaBot")
+
+@app.post("/api/telegram/link/{company_id}")
+async def telegram_link(company_id: int, user=Depends(get_current_user)):
+    """Generate a one-time Telegram link token."""
+    if not TELEGRAM_BOT_TOKEN:
+        raise HTTPException(400, "Telegram bot δεν έχει ρυθμιστεί")
+    role = get_member_role(user["id"], company_id)
+    if not role:
+        raise HTTPException(403, "Not a member of this company")
+
+    import secrets
+    token = f"tg_{secrets.token_hex(16)}"
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO telegram_link_tokens (user_id, company_id, token, expires_at) "
+            "VALUES (?, ?, ?, datetime('now', '+10 minutes'))",
+            (user["id"], company_id, token),
+        )
+    link = f"https://t.me/{TELEGRAM_BOT_USERNAME}?start={token}"
+    return {"link": link, "expires_in": 600}
+
+@app.post("/api/telegram/unlink")
+async def telegram_unlink(user=Depends(get_current_user)):
+    """Remove Telegram link for current user."""
+    with get_db() as conn:
+        conn.execute("UPDATE users SET telegram_chat_id = NULL WHERE id = ?", (user["id"],))
+    return {"ok": True}
+
+@app.get("/api/telegram/status")
+async def telegram_status(user=Depends(get_current_user)):
+    """Check if user has Telegram linked."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT telegram_chat_id FROM users WHERE id = ?", (user["id"],)
+        ).fetchone()
+    linked = bool(row and row["telegram_chat_id"])
+    return {"linked": linked, "bot_configured": bool(TELEGRAM_BOT_TOKEN)}
+
+TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "timologia-tg-secret")
+
+@app.post(f"/api/telegram/webhook/{TELEGRAM_WEBHOOK_SECRET}")
+async def telegram_webhook(request: Request):
+    """Receive Telegram updates."""
+    update = await request.json()
+    from telegram_bot import handle_update
+    asyncio.create_task(handle_update(update))
+    return {"ok": True}
 
 
 # --- Entry point ---

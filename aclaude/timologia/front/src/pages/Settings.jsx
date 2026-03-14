@@ -6,6 +6,7 @@ import { getUser } from '../lib/auth'
 const TABS = [
   { key: 'company', label: 'Εταιρεία', icon: CompanyIcon },
   { key: 'members', label: 'Μέλη', icon: MembersIcon },
+  { key: 'telegram', label: 'Telegram', icon: TelegramIcon },
   { key: 'account', label: 'Λογαριασμός', icon: AccountIcon },
 ]
 
@@ -45,6 +46,12 @@ export default function Settings() {
   const [inviteRole, setInviteRole] = useState('viewer')
   const [inviting, setInviting] = useState(false)
 
+  // Telegram state
+  const [tgLinked, setTgLinked] = useState(false)
+  const [tgBotConfigured, setTgBotConfigured] = useState(false)
+  const [tgLink, setTgLink] = useState('')
+  const [tgLoading, setTgLoading] = useState(false)
+
   useEffect(() => {
     if (!activeCompanyId) return
     setLoading(true)
@@ -67,6 +74,10 @@ export default function Settings() {
     apiJson(`/api/companies/${activeCompanyId}/invitations`)
       .then((data) => setInvitations(Array.isArray(data) ? data : []))
       .catch(() => setInvitations([]))
+
+    apiJson('/api/telegram/status')
+      .then((data) => { setTgLinked(data.linked); setTgBotConfigured(data.bot_configured) })
+      .catch(() => {})
   }, [activeCompanyId, companies])
 
   const saveCompany = async (e) => {
@@ -372,6 +383,96 @@ export default function Settings() {
         </div>
       )}
 
+      {/* ═══ Telegram tab ═══ */}
+      {tab === 'telegram' && (
+        <div className="rounded-xl bg-white p-4 sm:p-6 shadow-sm max-w-xl space-y-5">
+          <div className="flex items-center gap-3">
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-sky-100">
+              <svg className="h-6 w-6 text-sky-500" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" />
+              </svg>
+            </div>
+            <div>
+              <h3 className="text-base font-semibold text-slate-800">Σύνδεση Telegram</h3>
+              <p className="text-sm text-slate-500">Λάβετε ειδοποιήσεις και μιλήστε με τον AI βοηθό μέσω Telegram</p>
+            </div>
+          </div>
+
+          {!tgBotConfigured ? (
+            <div className="rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-700">
+              Το Telegram bot δεν έχει ρυθμιστεί ακόμα. Επικοινωνήστε με τον διαχειριστή.
+            </div>
+          ) : tgLinked ? (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 rounded-lg bg-green-50 px-4 py-3">
+                <svg className="h-5 w-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                <span className="text-sm font-medium text-green-700">Συνδεδεμένο</span>
+              </div>
+              <p className="text-sm text-slate-600">
+                Ο λογαριασμός σας είναι συνδεδεμένος με το Telegram. Μπορείτε να στέλνετε μηνύματα στο bot
+                και θα λαμβάνετε ειδοποιήσεις.
+              </p>
+              <button
+                onClick={async () => {
+                  if (!confirm('Αποσύνδεση Telegram;')) return
+                  await apiJson('/api/telegram/unlink', { method: 'POST' })
+                  setTgLinked(false)
+                  setTgLink('')
+                }}
+                className="rounded-lg border border-red-200 px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"
+              >
+                Αποσύνδεση
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <p className="text-sm text-slate-600">
+                Πατήστε το κουμπί για να δημιουργήσετε link σύνδεσης. Θα ανοίξει το Telegram
+                και θα συνδεθεί αυτόματα ο λογαριασμός σας.
+              </p>
+
+              {tgLink ? (
+                <div className="space-y-3">
+                  <a
+                    href={tgLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-center gap-2 rounded-lg bg-sky-500 px-5 py-3 text-sm font-medium text-white hover:bg-sky-600 transition-colors"
+                  >
+                    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" />
+                    </svg>
+                    Άνοιγμα στο Telegram
+                  </a>
+                  <p className="text-xs text-slate-400 text-center">Το link λήγει σε 10 λεπτά</p>
+                </div>
+              ) : (
+                <button
+                  onClick={async () => {
+                    setTgLoading(true)
+                    try {
+                      const data = await apiJson(`/api/telegram/link/${activeCompanyId}`, { method: 'POST' })
+                      if (data.link) setTgLink(data.link)
+                      else setError(data.detail || 'Σφάλμα δημιουργίας link')
+                    } catch {
+                      setError('Σφάλμα σύνδεσης Telegram')
+                    } finally {
+                      setTgLoading(false)
+                    }
+                  }}
+                  disabled={tgLoading}
+                  className="flex items-center gap-2 rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                >
+                  {tgLoading ? 'Δημιουργία...' : 'Δημιουργία Link Σύνδεσης'}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ═══ Account tab ═══ */}
       {tab === 'account' && (
         <div className="rounded-xl bg-white p-6 shadow-sm max-w-xl">
@@ -412,6 +513,14 @@ function MembersIcon() {
   return (
     <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+    </svg>
+  )
+}
+
+function TelegramIcon() {
+  return (
+    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" />
     </svg>
   )
 }
