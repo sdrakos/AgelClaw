@@ -4,6 +4,7 @@ import json
 import asyncio
 import logging
 import httpx
+from pathlib import Path
 from db import get_db
 
 log = logging.getLogger(__name__)
@@ -31,26 +32,66 @@ async def send_message(chat_id: str | int, text: str):
         })
 
 
+async def send_document(chat_id: str | int, file_path: str, caption: str = ""):
+    """Send a file as a Telegram document."""
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        with open(file_path, "rb") as f:
+            await client.post(
+                f"{API_URL}/sendDocument",
+                data={"chat_id": chat_id, "caption": caption},
+                files={"document": (Path(file_path).name, f)},
+            )
+
+
 def get_user_by_chat_id(chat_id: str) -> dict | None:
     """Find user linked to a Telegram chat_id."""
     with get_db() as conn:
         row = conn.execute(
-            "SELECT id, email, name, role FROM users WHERE telegram_chat_id = ?",
+            "SELECT id, email, name, role, telegram_company_id FROM users WHERE telegram_chat_id = ?",
             (str(chat_id),)
         ).fetchone()
     return dict(row) if row else None
 
 
-def get_user_company(user_id: int) -> dict | None:
-    """Get the user's primary company (first one they're member of)."""
+def get_user_company(user_id: int, company_id: int | None = None) -> dict | None:
+    """Get a specific company or the user's active telegram company."""
     with get_db() as conn:
-        row = conn.execute(
-            "SELECT c.id, c.name, c.afm, c.aade_env, c.aade_user_id, c.aade_subscription_key "
-            "FROM companies c JOIN company_members cm ON cm.company_id = c.id "
-            "WHERE cm.user_id = ? ORDER BY c.id LIMIT 1",
-            (user_id,)
-        ).fetchone()
+        if company_id:
+            row = conn.execute(
+                "SELECT c.id, c.name, c.afm, c.aade_env, c.aade_user_id, c.aade_subscription_key "
+                "FROM companies c JOIN company_members cm ON cm.company_id = c.id "
+                "WHERE cm.user_id = ? AND c.id = ?",
+                (user_id, company_id)
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT c.id, c.name, c.afm, c.aade_env, c.aade_user_id, c.aade_subscription_key "
+                "FROM companies c JOIN company_members cm ON cm.company_id = c.id "
+                "WHERE cm.user_id = ? ORDER BY c.id LIMIT 1",
+                (user_id,)
+            ).fetchone()
     return dict(row) if row else None
+
+
+def get_user_companies(user_id: int) -> list:
+    """Get all companies the user is a member of."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT c.id, c.name, c.afm "
+            "FROM companies c JOIN company_members cm ON cm.company_id = c.id "
+            "WHERE cm.user_id = ? ORDER BY c.name",
+            (user_id,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_active_company(user_id: int, company_id: int):
+    """Set the active telegram company for a user."""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE users SET telegram_company_id = ? WHERE id = ?",
+            (company_id, user_id)
+        )
 
 
 def link_telegram(token: str, chat_id: str) -> dict | None:
@@ -68,15 +109,21 @@ def link_telegram(token: str, chat_id: str) -> dict | None:
             return None
         # Mark token as used
         conn.execute("UPDATE telegram_link_tokens SET used = 1 WHERE id = ?", (row["id"],))
-        # Set chat_id on user
-        conn.execute("UPDATE users SET telegram_chat_id = ? WHERE id = ?", (str(chat_id), row["user_id"]))
-    return {"name": row["name"], "company_name": row["company_name"]}
+        # Set chat_id and active company on user
+        conn.execute(
+            "UPDATE users SET telegram_chat_id = ?, telegram_company_id = ? WHERE id = ?",
+            (str(chat_id), row["company_id"], row["user_id"])
+        )
+    return {"name": row["name"], "company_name": row["company_name"], "company_id": row["company_id"]}
 
 
 def unlink_telegram(user_id: int):
     """Remove Telegram link for a user."""
     with get_db() as conn:
-        conn.execute("UPDATE users SET telegram_chat_id = NULL WHERE id = ?", (user_id,))
+        conn.execute(
+            "UPDATE users SET telegram_chat_id = NULL, telegram_company_id = NULL WHERE id = ?",
+            (user_id,)
+        )
 
 
 async def handle_update(update: dict):
@@ -97,7 +144,10 @@ async def handle_update(update: dict):
                 f"Καλώς ήρθες <b>{result['name']}</b>!\n"
                 f"Συνδέθηκες με την εταιρεία <b>{result['company_name']}</b>.\n\n"
                 f"Μπορείς να μου κάνεις ερωτήσεις για τα τιμολόγιά σου, "
-                f"να ζητήσεις αναφορές ή να στείλεις παραστατικά."
+                f"να ζητήσεις αναφορές ή να στείλεις παραστατικά.\n\n"
+                f"Εντολές:\n"
+                f"/company — αλλαγή εταιρείας\n"
+                f"/unlink — αποσύνδεση"
             )
         else:
             await send_message(chat_id,
@@ -124,8 +174,34 @@ async def handle_update(update: dict):
             await send_message(chat_id, "Δεν είσαι συνδεδεμένος.")
         return
 
-    # Regular message — forward to AI agent
+    # Handle /company — switch active company
+    if text == "/company":
+        user = get_user_by_chat_id(chat_id)
+        if not user:
+            await send_message(chat_id, "Δεν είστε συνδεδεμένος.")
+            return
+        companies = get_user_companies(user["id"])
+        if len(companies) <= 1:
+            await send_message(chat_id, "Έχετε μόνο μία εταιρεία.")
+            return
+        lines = ["Επιλέξτε εταιρεία (στείλτε τον αριθμό):\n"]
+        for i, c in enumerate(companies, 1):
+            active = " ✓" if c["id"] == user.get("telegram_company_id") else ""
+            lines.append(f"{i}. {c['name']} (ΑΦΜ: {c['afm']}){active}")
+        await send_message(chat_id, "\n".join(lines))
+        return
+
+    # Check if user is selecting a company (digit response after /company)
     user = get_user_by_chat_id(chat_id)
+    if user and text.isdigit():
+        companies = get_user_companies(user["id"])
+        idx = int(text) - 1
+        if 0 <= idx < len(companies):
+            set_active_company(user["id"], companies[idx]["id"])
+            await send_message(chat_id, f"Ενεργή εταιρεία: <b>{companies[idx]['name']}</b>")
+            return
+
+    # Regular message — forward to AI agent
     if not user:
         await send_message(chat_id,
             "Δεν είστε συνδεδεμένος.\n"
@@ -133,7 +209,9 @@ async def handle_update(update: dict):
         )
         return
 
-    company = get_user_company(user["id"])
+    company = get_user_company(user["id"], user.get("telegram_company_id"))
+    if not company:
+        company = get_user_company(user["id"])
     if not company:
         await send_message(chat_id, "Δεν βρέθηκε εταιρεία. Προσθέστε μία στο timologia.me")
         return
@@ -142,7 +220,7 @@ async def handle_update(update: dict):
     await send_message(chat_id, "Επεξεργασία...")
     try:
         from agent import create_agent, TimologiaContext
-        from config import FERNET
+        from config import FERNET, REPORTS_DIR
         from agents import Runner
 
         ctx = TimologiaContext(
@@ -160,7 +238,22 @@ async def handle_update(update: dict):
         result = await Runner.run(agent, input=text, context=ctx)
         reply = result.final_output or "Δεν μπόρεσα να απαντήσω."
 
-        # Split long messages (Telegram 4096 char limit)
+        # Check if agent generated a report file
+        report_sent = False
+        for item in (result.raw_responses or []):
+            for output in getattr(item, "output", []):
+                if hasattr(output, "output") and isinstance(output.output, str):
+                    try:
+                        data = json.loads(output.output)
+                        if isinstance(data, dict) and data.get("filename"):
+                            fpath = REPORTS_DIR / data["filename"]
+                            if fpath.exists():
+                                await send_document(chat_id, str(fpath), f"Αναφορά: {data['filename']}")
+                                report_sent = True
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+        # Send text reply
         for i in range(0, len(reply), 4000):
             await send_message(chat_id, reply[i:i + 4000])
 

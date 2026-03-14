@@ -10,6 +10,8 @@ SQLite WAL mode — `back/data/timologia.db`
 | password_hash | TEXT | bcrypt |
 | name | TEXT | NOT NULL |
 | role | TEXT | `user` / `admin` |
+| telegram_chat_id | TEXT | Telegram chat ID (linked via bot) |
+| telegram_company_id | INTEGER FK | → companies(id), active company for Telegram |
 | created_at | DATETIME | DEFAULT CURRENT_TIMESTAMP |
 
 ## companies
@@ -114,6 +116,17 @@ SQLite WAL mode — `back/data/timologia.db`
 | token | TEXT UNIQUE | Invitation token |
 | status | TEXT | `pending` / `accepted` |
 | expires_at | DATETIME | 7 days TTL |
+| created_at | DATETIME | |
+
+## telegram_link_tokens
+| Column | Type | Notes |
+|--------|------|-------|
+| id | INTEGER PK | AUTOINCREMENT |
+| user_id | INTEGER FK | → users(id) ON DELETE CASCADE |
+| company_id | INTEGER FK | → companies(id) ON DELETE CASCADE |
+| token | TEXT UNIQUE | One-time link token (`tg_...`) |
+| used | INTEGER | 0/1 |
+| expires_at | DATETIME | 10 minutes TTL |
 | created_at | DATETIME | |
 
 ## password_resets

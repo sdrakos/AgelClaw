@@ -1,4 +1,5 @@
 ALTER TABLE users ADD COLUMN telegram_chat_id TEXT DEFAULT NULL;
+ALTER TABLE users ADD COLUMN telegram_company_id INTEGER DEFAULT NULL REFERENCES companies(id);
 
 CREATE TABLE IF NOT EXISTS telegram_link_tokens (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
