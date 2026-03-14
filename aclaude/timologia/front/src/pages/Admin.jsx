@@ -9,18 +9,13 @@ export default function Admin() {
   const [tab, setTab] = useState('users')
 
   useEffect(() => {
-    Promise.all([
-      apiJson('/api/admin/users'),
-      apiJson('/api/admin/companies'),
-      apiJson('/api/admin/overview'),
-    ])
-      .then(([u, c, o]) => {
-        setUsers(u)
-        setCompanies(c)
-        setOverview(o)
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false))
+    const load = async () => {
+      try { setUsers(await apiJson('/api/admin/users')) } catch {}
+      try { setCompanies(await apiJson('/api/admin/companies')) } catch {}
+      try { setOverview(await apiJson('/api/admin/overview')) } catch {}
+      setLoading(false)
+    }
+    load()
   }, [])
 
   const changeRole = async (userId, newRole) => {
