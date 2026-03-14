@@ -53,35 +53,60 @@ def get_user_by_chat_id(chat_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+def _is_admin(user_id: int) -> bool:
+    with get_db() as conn:
+        row = conn.execute("SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()
+    return row and row["role"] == "admin"
+
+
 def get_user_company(user_id: int, company_id: int | None = None) -> dict | None:
-    """Get a specific company or the user's active telegram company."""
+    """Get a specific company or the user's active telegram company. Admin sees all."""
+    admin = _is_admin(user_id)
     with get_db() as conn:
         if company_id:
-            row = conn.execute(
-                "SELECT c.id, c.name, c.afm, c.aade_env, c.aade_user_id, c.aade_subscription_key "
-                "FROM companies c JOIN company_members cm ON cm.company_id = c.id "
-                "WHERE cm.user_id = ? AND c.id = ?",
-                (user_id, company_id)
-            ).fetchone()
+            if admin:
+                row = conn.execute(
+                    "SELECT id, name, afm, aade_env, aade_user_id, aade_subscription_key "
+                    "FROM companies WHERE id = ?", (company_id,)
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT c.id, c.name, c.afm, c.aade_env, c.aade_user_id, c.aade_subscription_key "
+                    "FROM companies c JOIN company_members cm ON cm.company_id = c.id "
+                    "WHERE cm.user_id = ? AND c.id = ?",
+                    (user_id, company_id)
+                ).fetchone()
         else:
-            row = conn.execute(
-                "SELECT c.id, c.name, c.afm, c.aade_env, c.aade_user_id, c.aade_subscription_key "
-                "FROM companies c JOIN company_members cm ON cm.company_id = c.id "
-                "WHERE cm.user_id = ? ORDER BY c.id LIMIT 1",
-                (user_id,)
-            ).fetchone()
+            if admin:
+                row = conn.execute(
+                    "SELECT id, name, afm, aade_env, aade_user_id, aade_subscription_key "
+                    "FROM companies ORDER BY id LIMIT 1"
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT c.id, c.name, c.afm, c.aade_env, c.aade_user_id, c.aade_subscription_key "
+                    "FROM companies c JOIN company_members cm ON cm.company_id = c.id "
+                    "WHERE cm.user_id = ? ORDER BY c.id LIMIT 1",
+                    (user_id,)
+                ).fetchone()
     return dict(row) if row else None
 
 
 def get_user_companies(user_id: int) -> list:
-    """Get all companies the user is a member of."""
+    """Get all companies the user is a member of. Admin sees all."""
+    admin = _is_admin(user_id)
     with get_db() as conn:
-        rows = conn.execute(
-            "SELECT c.id, c.name, c.afm "
-            "FROM companies c JOIN company_members cm ON cm.company_id = c.id "
-            "WHERE cm.user_id = ? ORDER BY c.name",
-            (user_id,)
-        ).fetchall()
+        if admin:
+            rows = conn.execute(
+                "SELECT id, name, afm FROM companies ORDER BY name"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT c.id, c.name, c.afm "
+                "FROM companies c JOIN company_members cm ON cm.company_id = c.id "
+                "WHERE cm.user_id = ? ORDER BY c.name",
+                (user_id,)
+            ).fetchall()
     return [dict(r) for r in rows]
 
 
