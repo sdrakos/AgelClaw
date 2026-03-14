@@ -356,8 +356,8 @@ npm run dev                       # → http://localhost:5173 (proxies /api→:8
 ```
 timologia/
 ├── back/
-│   ├── app.py                    # FastAPI app: auth, companies, invoices, reports, schedules
-│   ├── auth.py                   # JWT (HS256, 24h) + bcrypt + role hierarchy
+│   ├── app.py                    # FastAPI app: auth, companies, invoices, reports, schedules, admin panel
+│   ├── auth.py                   # JWT (HS256, 24h) + bcrypt + role hierarchy + admin notifications
 │   ├── config.py                 # Env vars, Fernet auto-gen, paths
 │   ├── db.py                     # SQLite WAL + migration runner
 │   ├── chat.py                   # SSE streaming + OpenAI Runner + confirmation flow
@@ -370,18 +370,20 @@ timologia/
 │   ├── jobs.py                   # Cron parser + RQ job runner
 │   ├── worker.py                 # RQ worker + scheduler loop
 │   ├── migrations/001_init.sql   # 8 tables + 003_password_resets.sql
+│   ├── tests/                    # pytest suite (20 tests: auth, companies, admin)
 │   ├── data/timologia.db         # SQLite database (auto-created)
 │   ├── .env                      # Credentials (JWT_SECRET, FERNET_KEY, OPENAI_API_KEY, etc.)
 │   └── requirements.txt
 ├── front/
 │   ├── src/
 │   │   ├── App.jsx               # Routes: / (Landing), /login, /app/* (protected)
-│   │   ├── pages/                # Landing, Login, Dashboard, Chat, Invoices, Analytics, Reports, Settings, Help, AcceptInvite, ResetPassword
+│   │   ├── pages/                # Landing, Login, Dashboard, Chat, Invoices, Analytics, Reports, Settings, Admin, Help, AcceptInvite, ResetPassword
 │   │   ├── components/           # Layout, ChatPanel, ToolActivity, ConfirmationCard, CompanySelector, InvoiceTable
 │   │   ├── context/CompanyContext.jsx
 │   │   └── lib/                  # api.js (fetch + SSE), auth.js (JWT localStorage)
 │   ├── vite.config.js            # Proxy /api→:8100
 │   └── package.json
+├── sql.md                        # Full database schema documentation
 ├── ecosystem.config.js           # PM2: api + worker
 └── nginx.conf                    # Reverse proxy + SSE
 ```
@@ -418,9 +420,23 @@ timologia/
 
 **Help page.** `Help.jsx` at `/app/help` — myDATA guide with 3 screenshots (from `/help/mydata1-3.png`), setup instructions, 7 FAQ items. Screenshot 3 has CSS `backdrop-filter: blur(20px)` overlays for personal data privacy.
 
-**Duplicate AFM guard.** `create_company()` checks for existing AFM before INSERT — returns 400 "Υπάρχει ήδη εταιρεία με αυτό το ΑΦΜ" instead of crashing with 500 IntegrityError.
+**AADE credential validation on company creation.** `create_company()` requires AADE User ID + Subscription Key (mandatory). Makes a test `RequestMyIncome` call to ΑΑΔΕ to verify credentials match the AFM. If validation fails → 400 error. Prevents malicious AFM claiming. Same validation on `update_company()`.
+
+**Duplicate AFM guard.** `create_company()` checks for existing AFM before INSERT — returns 400 "Υπάρχει ήδη εταιρεία με αυτό το ΑΦΜ. Ζητήστε πρόσκληση από τον διαχειριστή της."
+
+**Admin panel.** `Admin.jsx` at `/app/admin` — visible only to users with `role='admin'`. Shows overview cards (users/companies/invoices counts), users tab (list, change role, delete), companies tab (list with members). Backend: `GET /api/admin/overview`, `GET /api/admin/users`, `GET /api/admin/companies`, `PATCH /api/admin/users/{id}/role`, `DELETE /api/admin/users/{id}`. All endpoints require `role='admin'` via `_require_admin()`. Self-protection: admin cannot change own role or delete self.
+
+**Admin visibility.** Platform admins (`role='admin'`) see all companies via `GET /api/companies` without needing `company_members` entries. Admin users are hidden from non-admin users in `GET /api/companies/{id}/members` — regular users don't see the admin in their member list.
+
+**Admin email notifications.** `auth.py` sends email to `stefanos.drakos@gmail.com` on user registration and company creation via `_notify_admin()` (background thread, non-blocking). Uses `email_sender.send_email()` (Microsoft Graph).
+
+**AFM lookup with ΚΑΔ.** `lookup_afm` tool (tool 10) returns business activity codes (ΚΑΔ) from GSIS SOAP `rgWsPublic2AfmMethod` — `firm_act_tab` with code, description, kind (1=Κύρια, 2=Δευτερεύουσα). Cache skips entries without `activities` key to force re-lookup for old cached data.
 
 **Invoice sync window.** `_sync_invoices()` fetches from Jan 1 of previous year (not last 90 days) to capture full history.
+
+**pytest suite.** 20 tests in `back/tests/` covering auth (register, login, duplicates, protected endpoints), companies (AADE credential requirement, duplicate AFM, access control), and admin (overview, CRUD, role changes, self-protection, authorization). Each test uses a fresh tmp SQLite DB. Run: `cd timologia/back && python -m pytest tests/ -v`.
+
+**Database schema reference.** `timologia/sql.md` — full schema documentation for all 10 tables with columns, types, constraints, relationships, and the separate `afm_cache.db`.
 
 **Analytics dashboard.** `analytics.py` provides `GET /api/analytics?company_id=X` — fetches all invoices once, aggregates in Python. Returns 10 sections: period_comparison (month/week/YoY), daily_revenue (30 days), vat_breakdown (pie), top_suppliers, top_customers, avg_invoice_by_month, month_forecast (linear projection), seasonality, weekday_revenue, monthly_evolution. Frontend uses Recharts (+ `react-is` peer dep). Route: `/analytics`.
 
