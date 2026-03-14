@@ -242,7 +242,7 @@ async def income_summary(
     date_from: str = "",
     date_to: str = "",
 ) -> str:
-    """Σύνοψη εσόδων για περίοδο. date_from, date_to: μορφή YYYY-MM-DD. Επιστρέφει XML από AADE."""
+    """Σύνοψη εσόδων κατά κατηγορία ΦΠΑ (raw XML από AADE API). ΜΗΝ χρησιμοποιείς για λίστα/πλήθος/ποσά παραστατικών — χρησιμοποίησε get_invoices αντ' αυτού. date_from, date_to: μορφή YYYY-MM-DD."""
     tc = ctx.context
     today = _greek_now().strftime("%Y-%m-%d")
     if not date_from:
@@ -265,7 +265,7 @@ async def expenses_summary(
     date_from: str = "",
     date_to: str = "",
 ) -> str:
-    """Σύνοψη εξόδων για περίοδο. date_from, date_to: μορφή YYYY-MM-DD. Επιστρέφει XML από AADE."""
+    """Σύνοψη εξόδων κατά κατηγορία ΦΠΑ (raw XML από AADE API). ΜΗΝ χρησιμοποιείς για λίστα/πλήθος/ποσά παραστατικών — χρησιμοποίησε get_invoices αντ' αυτού. date_from, date_to: μορφή YYYY-MM-DD."""
     tc = ctx.context
     today = _greek_now().strftime("%Y-%m-%d")
     if not date_from:
