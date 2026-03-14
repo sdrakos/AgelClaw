@@ -26,7 +26,13 @@ def run_migrations():
     applied = {r[0] for r in conn.execute("SELECT name FROM _migrations").fetchall()}
     for sql_file in sorted(MIGRATIONS_DIR.glob("*.sql")):
         if sql_file.name not in applied:
-            conn.executescript(sql_file.read_text(encoding="utf-8"))
+            try:
+                conn.executescript(sql_file.read_text(encoding="utf-8"))
+            except sqlite3.OperationalError as e:
+                if "duplicate column name" in str(e):
+                    pass  # Column already exists (manual ALTER), safe to skip
+                else:
+                    raise
             conn.execute("INSERT INTO _migrations (name) VALUES (?)", (sql_file.name,))
             conn.commit()
     conn.close()
