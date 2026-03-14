@@ -4,8 +4,11 @@ import json
 import asyncio
 import logging
 import httpx
+from datetime import datetime
 from pathlib import Path
 from db import get_db
+
+MAX_HISTORY = 20  # Keep last N messages per session
 
 log = logging.getLogger(__name__)
 
@@ -142,6 +145,39 @@ def link_telegram(token: str, chat_id: str) -> dict | None:
     return {"name": row["name"], "company_name": row["company_name"], "company_id": row["company_id"]}
 
 
+def _get_tg_session(user_id: int, company_id: int) -> tuple[int, list]:
+    """Get or create a Telegram chat session. Returns (session_id, messages)."""
+    with get_db() as conn:
+        # Find existing Telegram session for this user+company (most recent)
+        row = conn.execute(
+            "SELECT id, messages FROM chat_sessions "
+            "WHERE user_id=? AND company_id=? ORDER BY updated_at DESC LIMIT 1",
+            (user_id, company_id),
+        ).fetchone()
+        if row:
+            messages = json.loads(row["messages"])
+            # Trim old messages
+            if len(messages) > MAX_HISTORY:
+                messages = messages[-MAX_HISTORY:]
+            return row["id"], messages
+        # Create new
+        cur = conn.execute(
+            "INSERT INTO chat_sessions (user_id, company_id, messages, created_at, updated_at) "
+            "VALUES (?, ?, '[]', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            (user_id, company_id),
+        )
+        return cur.lastrowid, []
+
+
+def _save_tg_session(session_id: int, messages: list):
+    """Save Telegram chat session messages."""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE chat_sessions SET messages=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            (json.dumps(messages, ensure_ascii=False), session_id),
+        )
+
+
 def unlink_telegram(user_id: int):
     """Remove Telegram link for a user."""
     with get_db() as conn:
@@ -241,7 +277,7 @@ async def handle_update(update: dict):
         await send_message(chat_id, "Δεν βρέθηκε εταιρεία. Προσθέστε μία στο timologia.me")
         return
 
-    # Run agent query
+    # Run agent query with conversation history
     await send_message(chat_id, "Επεξεργασία...")
     try:
         from agent import create_agent, TimologiaContext
@@ -259,24 +295,39 @@ async def handle_update(update: dict):
             aade_env=company["aade_env"],
         )
 
+        # Load or create chat session for this user+company on Telegram
+        session_id, messages = _get_tg_session(user["id"], company["id"])
+        messages.append({"role": "user", "content": text, "ts": datetime.now().isoformat()})
+
+        # Build agent input with history
+        agent_input = [{"role": m["role"], "content": m["content"]}
+                       for m in messages if m.get("role") in ("user", "assistant")]
+
         agent = create_agent(ctx)
-        result = await Runner.run(agent, input=text, context=ctx)
+        result = await Runner.run(agent, input=agent_input, context=ctx)
         reply = result.final_output or "Δεν μπόρεσα να απαντήσω."
+
+        # Save assistant reply to session
+        messages.append({"role": "assistant", "content": reply, "ts": datetime.now().isoformat()})
+        # Trim to last N messages
+        if len(messages) > MAX_HISTORY:
+            messages = messages[-MAX_HISTORY:]
+        _save_tg_session(session_id, messages)
 
         # Check if agent generated a report file
         report_sent = False
-        for item in (result.raw_responses or []):
-            for output in getattr(item, "output", []):
-                if hasattr(output, "output") and isinstance(output.output, str):
-                    try:
-                        data = json.loads(output.output)
-                        if isinstance(data, dict) and data.get("filename"):
-                            fpath = REPORTS_DIR / data["filename"]
-                            if fpath.exists():
-                                await send_document(chat_id, str(fpath), f"Αναφορά: {data['filename']}")
-                                report_sent = True
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+        for item in getattr(result, "new_items", []):
+            output = getattr(item, "output", None)
+            if output and isinstance(output, str):
+                try:
+                    data = json.loads(output)
+                    if isinstance(data, dict) and data.get("filename"):
+                        fpath = REPORTS_DIR / data["filename"]
+                        if fpath.exists():
+                            await send_document(chat_id, str(fpath), f"Αναφορά: {data['filename']}")
+                            report_sent = True
+                except (json.JSONDecodeError, TypeError):
+                    pass
 
         # Send text reply
         for i in range(0, len(reply), 4000):
