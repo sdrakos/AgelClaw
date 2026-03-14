@@ -9,6 +9,7 @@ import Invoices from './pages/Invoices'
 import Reports from './pages/Reports'
 import Analytics from './pages/Analytics'
 import Settings from './pages/Settings'
+import Admin from './pages/Admin'
 import Help from './pages/Help'
 import AcceptInvite from './pages/AcceptInvite'
 import ResetPassword from './pages/ResetPassword'
@@ -32,6 +33,7 @@ export default function App() {
           <Route path="analytics" element={<Analytics />} />
           <Route path="reports" element={<Reports />} />
           <Route path="settings" element={<Settings />} />
+          <Route path="admin" element={<Admin />} />
           <Route path="help" element={<Help />} />
         </Route>
       </Routes>

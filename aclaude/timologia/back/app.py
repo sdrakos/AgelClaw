@@ -1017,6 +1017,74 @@ async def api_lookup_afm(afm: str, user=Depends(get_current_user)):
     return info
 
 
+# --- Admin panel ---
+
+def _require_admin(user):
+    if user["role"] != "admin":
+        raise HTTPException(403, "Admin access required")
+
+@app.get("/api/admin/overview")
+async def admin_overview(user=Depends(get_current_user)):
+    _require_admin(user)
+    with get_db() as conn:
+        users_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        companies_count = conn.execute("SELECT COUNT(*) FROM companies").fetchone()[0]
+        invoices_count = conn.execute("SELECT COUNT(*) FROM invoices_cache").fetchone()[0]
+    return {"users": users_count, "companies": companies_count, "invoices": invoices_count}
+
+@app.get("/api/admin/users")
+async def admin_list_users(user=Depends(get_current_user)):
+    _require_admin(user)
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT u.id, u.email, u.name, u.role, u.created_at, "
+            "GROUP_CONCAT(c.name || ' (' || cm.role || ')', ', ') as companies "
+            "FROM users u "
+            "LEFT JOIN company_members cm ON cm.user_id = u.id "
+            "LEFT JOIN companies c ON c.id = cm.company_id "
+            "GROUP BY u.id ORDER BY u.created_at DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+class AdminRoleUpdate(BaseModel):
+    role: str
+
+@app.patch("/api/admin/users/{user_id}/role")
+async def admin_update_role(user_id: int, req: AdminRoleUpdate, user=Depends(get_current_user)):
+    _require_admin(user)
+    if req.role not in ("admin", "user"):
+        raise HTTPException(400, "Role must be 'admin' or 'user'")
+    if user_id == user["id"]:
+        raise HTTPException(400, "Δεν μπορείτε να αλλάξετε τον δικό σας ρόλο")
+    with get_db() as conn:
+        conn.execute("UPDATE users SET role=? WHERE id=?", (req.role, user_id))
+    return {"ok": True}
+
+@app.delete("/api/admin/users/{user_id}")
+async def admin_delete_user(user_id: int, user=Depends(get_current_user)):
+    _require_admin(user)
+    if user_id == user["id"]:
+        raise HTTPException(400, "Δεν μπορείτε να διαγράψετε τον εαυτό σας")
+    with get_db() as conn:
+        conn.execute("DELETE FROM company_members WHERE user_id=?", (user_id,))
+        conn.execute("DELETE FROM users WHERE id=?", (user_id,))
+    return {"ok": True}
+
+@app.get("/api/admin/companies")
+async def admin_list_companies(user=Depends(get_current_user)):
+    _require_admin(user)
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT c.id, c.name, c.afm, c.aade_env, "
+            "GROUP_CONCAT(u.email || ' (' || cm.role || ')', ', ') as members "
+            "FROM companies c "
+            "LEFT JOIN company_members cm ON cm.company_id = c.id "
+            "LEFT JOIN users u ON u.id = cm.user_id "
+            "GROUP BY c.id ORDER BY c.name"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 # --- Entry point ---
 if __name__ == "__main__":
     import uvicorn
