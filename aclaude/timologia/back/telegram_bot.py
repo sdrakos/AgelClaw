@@ -18,11 +18,17 @@ WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "timologia-tg-secret"
 
 
 async def set_webhook(base_url: str):
-    """Set Telegram webhook URL."""
+    """Set Telegram webhook URL and register bot commands."""
     url = f"{base_url}/api/telegram/webhook/{WEBHOOK_SECRET}"
     async with httpx.AsyncClient() as client:
         resp = await client.post(f"{API_URL}/setWebhook", json={"url": url})
         log.info(f"Telegram webhook set: {resp.json()}")
+        # Register bot commands (visible when user types /)
+        await client.post(f"{API_URL}/setMyCommands", json={"commands": [
+            {"command": "company", "description": "Αλλαγή εταιρείας"},
+            {"command": "unlink", "description": "Αποσύνδεση λογαριασμού"},
+            {"command": "start", "description": "Σύνδεση με Timologia"},
+        ]})
 
 
 async def send_message(chat_id: str | int, text: str):
