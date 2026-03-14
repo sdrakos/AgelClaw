@@ -1097,7 +1097,7 @@ async def admin_list_companies(user=Depends(get_current_user)):
 # --- Telegram ---
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_BOT_USERNAME = os.environ.get("TELEGRAM_BOT_USERNAME", "TimologiaBot")
+TELEGRAM_BOT_USERNAME = os.environ.get("TELEGRAM_BOT_USERNAME", "TimologiaAgelBot")
 
 @app.post("/api/telegram/link/{company_id}")
 async def telegram_link(company_id: int, user=Depends(get_current_user)):
