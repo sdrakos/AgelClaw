@@ -1035,7 +1035,7 @@ async def admin_overview(user=Depends(get_current_user)):
         users_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         companies_count = conn.execute("SELECT COUNT(*) FROM companies").fetchone()[0]
         try:
-            invoices_count = conn.execute("SELECT COUNT(*) FROM invoices_cache").fetchone()[0]
+            invoices_count = conn.execute("SELECT COUNT(*) FROM invoices").fetchone()[0]
         except Exception:
             invoices_count = 0
     return {"users": users_count, "companies": companies_count, "invoices": invoices_count}
