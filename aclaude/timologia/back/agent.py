@@ -149,35 +149,89 @@ def _get_client(ctx: TimologiaContext):
     )
 
 
-# ── Tool 1: Get Invoices ──
+# ── Tool 1: Get Invoices (local cache) ──
 
 @function_tool
 async def get_invoices(
     ctx: RunContextWrapper[TimologiaContext],
     date_from: str = "",
     date_to: str = "",
-    direction: str = "sent",
+    direction: str = "all",
+    counterpart_afm: str = "",
+    counterpart_name: str = "",
 ) -> str:
-    """Ανάκτηση παραστατικών από AADE.
+    """Αναζήτηση παραστατικών από τοπικό cache (ίδια δεδομένα με το web).
     date_from, date_to: μορφή YYYY-MM-DD (π.χ. '2026-02-01').
-    direction: 'sent' ή 'received'."""
+    direction: 'sent', 'received', ή 'all' (default).
+    counterpart_afm: φιλτράρισμα κατά ΑΦΜ αντισυμβαλλομένου (προαιρετικό).
+    counterpart_name: αναζήτηση κατά επωνυμία αντισυμβαλλομένου (LIKE, προαιρετικό).
+    Επιστρέφει λίστα παραστατικών + σύνοψη (πλήθος, καθαρή αξία, ΦΠΑ, σύνολο)."""
     tc = ctx.context
-    client = _get_client(tc)
-    try:
-        if direction == "received":
-            invoices = await client.get_received_invoices(
-                date_from=date_from or None, date_to=date_to or None,
-            )
-        else:
-            invoices = await client.get_sent_invoices(
-                date_from=date_from or None, date_to=date_to or None,
-            )
-    finally:
-        await client.close()
 
-    # Limit to 50 results
-    invoices = invoices[:50]
-    return json.dumps(invoices, ensure_ascii=False)
+    # Trigger sync if needed (background-safe)
+    try:
+        from app import _sync_invoices
+        await _sync_invoices(tc.company_id)
+    except Exception:
+        pass
+
+    query = "SELECT * FROM invoices WHERE company_id = ?"
+    params: list = [tc.company_id]
+
+    if date_from:
+        query += " AND issue_date >= ?"
+        params.append(date_from)
+    if date_to:
+        query += " AND issue_date <= ?"
+        params.append(date_to)
+    if direction and direction != "all":
+        query += " AND direction = ?"
+        params.append(direction)
+    if counterpart_afm:
+        query += " AND counterpart_afm = ?"
+        params.append(counterpart_afm)
+    if counterpart_name:
+        query += " AND counterpart_name LIKE ?"
+        params.append(f"%{counterpart_name}%")
+
+    query += " ORDER BY issue_date DESC LIMIT 100"
+
+    with get_db() as conn:
+        rows = conn.execute(query, params).fetchall()
+
+    invoices = []
+    total_net = 0.0
+    total_vat = 0.0
+    total_gross = 0.0
+    for r in rows:
+        inv = {
+            "mark": r["mark"],
+            "invoice_type": r["invoice_type"],
+            "series": r["series"],
+            "aa": r["aa"],
+            "issue_date": r["issue_date"],
+            "counterpart_afm": r["counterpart_afm"],
+            "counterpart_name": r["counterpart_name"],
+            "net_amount": r["net_amount"],
+            "vat_amount": r["vat_amount"],
+            "total_amount": r["total_amount"],
+            "direction": r["direction"],
+        }
+        invoices.append(inv)
+        total_net += r["net_amount"] or 0
+        total_vat += r["vat_amount"] or 0
+        total_gross += r["total_amount"] or 0
+
+    result = {
+        "invoices": invoices,
+        "summary": {
+            "count": len(invoices),
+            "total_net": round(total_net, 2),
+            "total_vat": round(total_vat, 2),
+            "total_gross": round(total_gross, 2),
+        },
+    }
+    return json.dumps(result, ensure_ascii=False)
 
 
 # ── Tool 2: Income Summary ──
@@ -575,7 +629,7 @@ def create_agent(context: TimologiaContext) -> Agent:
 1. Απαντάς ΠΑΝΤΑ στα Ελληνικά.
 2. Για κάθε ενέργεια εγγραφής (αποστολή παραστατικού, ακύρωση, αλλαγή ρυθμίσεων) ΠΑΝΤΑ κάνεις πρώτα dry_run=True.
 3. ΠΟΤΕ μην στέλνεις παραστατικό ή ακυρώνεις χωρίς dry_run πρώτα — ο χρήστης πρέπει να επιβεβαιώσει.
-4. Όταν ο χρήστης ρωτάει για παραστατικά, χρησιμοποίησε get_invoices.
+4. Όταν ο χρήστης ρωτάει για παραστατικά/έσοδα/έξοδα, ΠΑΝΤΑ χρησιμοποίησε get_invoices (τοπικός cache). Για έσοδα: direction='sent'. Για έξοδα: direction='received'. Για όλα: direction='all'.
 5. Για αναφορές/reports χρησιμοποίησε generate_report_tool.
 6. Μην εμφανίζεις ποτέ credentials (aade_user_id, subscription_key).
 7. Τα ποσά εμφανίζονται σε EUR με 2 δεκαδικά.
