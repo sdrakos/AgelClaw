@@ -652,14 +652,18 @@ def _generate_supplier_xlsx(path: Path, expenses: list,
     # Totals
     if sorted_suppliers:
         total_row = len(sorted_suppliers) + 2
-        ws.cell(row=total_row, column=2, value="ΣΥΝΟΛΟ").font = TOTAL_FONT
-        ws.cell(row=total_row, column=3, value=sum(d["count"] for d in supplier_groups.values())).font = TOTAL_FONT
-        for col_idx in (4, 5, 6):
-            col_letter = get_column_letter(col_idx)
-            cell = ws.cell(
-                row=total_row, column=col_idx,
-                value=f"=SUM({col_letter}2:{col_letter}{total_row - 1})",
-            )
+        total_count = sum(d["count"] for d in supplier_groups.values())
+        total_net = round(sum(d["net"] for d in supplier_groups.values()), 2)
+        total_vat = round(sum(d["vat"] for d in supplier_groups.values()), 2)
+        total_gross = round(sum(d["gross"] for d in supplier_groups.values()), 2)
+
+        ws.cell(row=total_row, column=1, value="ΣΥΝΟΛΟ").font = TOTAL_FONT
+        ws.cell(row=total_row, column=1).fill = TOTAL_FILL
+        c = ws.cell(row=total_row, column=3, value=total_count)
+        c.font = TOTAL_FONT
+        c.fill = TOTAL_FILL
+        for col_idx, val in ((4, total_net), (5, total_vat), (6, total_gross)):
+            cell = ws.cell(row=total_row, column=col_idx, value=val)
             cell.number_format = CURRENCY_FMT
             cell.font = TOTAL_FONT
             cell.fill = TOTAL_FILL
