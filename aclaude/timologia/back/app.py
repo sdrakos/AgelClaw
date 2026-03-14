@@ -193,8 +193,10 @@ async def list_companies(user=Depends(get_current_user)):
 
 @app.post("/api/companies")
 async def create_company(req: CompanyReq, user=Depends(get_current_user)):
-    # Validate AADE credentials match the AFM
-    if req.aade_user_id and req.aade_subscription_key:
+    # AADE credentials are required to prove AFM ownership
+    if not req.aade_user_id or not req.aade_subscription_key:
+        raise HTTPException(400, "Τα στοιχεία ΑΑΔΕ (User ID και Subscription Key) είναι υποχρεωτικά για τη δημιουργία εταιρείας.")
+    if True:
         from aade_client import MyDataClient
         client = MyDataClient(
             user_id=req.aade_user_id,

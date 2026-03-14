@@ -65,15 +65,15 @@ function AddCompanyForm({ onCreated }) {
               className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-slate-700 placeholder-gray-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 outline-none" />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">AADE User ID</label>
-            <input type="text" value={aadeUser} onChange={(e) => setAadeUser(e.target.value)}
-              placeholder="Προαιρετικό — μπορείτε να το προσθέσετε αργότερα"
+            <label className="mb-1 block text-sm font-medium text-slate-700">AADE User ID *</label>
+            <input type="text" value={aadeUser} onChange={(e) => setAadeUser(e.target.value)} required
+              placeholder="Από myDATA → Διαχείριση Συνδρομών"
               className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-slate-700 placeholder-gray-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 outline-none" />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">AADE Subscription Key</label>
-            <input type="password" value={aadeKey} onChange={(e) => setAadeKey(e.target.value)}
-              placeholder="Προαιρετικό"
+            <label className="mb-1 block text-sm font-medium text-slate-700">AADE Subscription Key *</label>
+            <input type="password" value={aadeKey} onChange={(e) => setAadeKey(e.target.value)} required
+              placeholder="Από myDATA → Διαχείριση Συνδρομών"
               className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-slate-700 placeholder-gray-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 outline-none" />
           </div>
           <div>
