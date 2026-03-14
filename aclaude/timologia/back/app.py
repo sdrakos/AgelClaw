@@ -2,6 +2,8 @@
 import os
 import json
 import asyncio
+import time
+from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 from fastapi import FastAPI, Depends, HTTPException, Query, Request
@@ -10,8 +12,8 @@ from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 from db import run_migrations, get_db
-from auth import get_current_user, register_user, login_user, get_member_role, require_role, hash_password
-from config import PORT, FERNET, REPORTS_DIR, APP_URL
+from auth import get_current_user, register_user, login_user, get_member_role, require_role, hash_password, validate_password
+from config import PORT, FERNET, REPORTS_DIR, APP_URL, ALLOWED_ORIGINS
 from chat import router as chat_router
 from analytics import router as analytics_router
 
@@ -26,14 +28,26 @@ app = FastAPI(title="Timologia API", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 app.include_router(chat_router)
 app.include_router(analytics_router)
+
+
+# --- Rate limiting ---
+_rate_limits: dict[str, list[float]] = defaultdict(list)
+
+def _check_rate_limit(key: str, max_attempts: int = 5, window: int = 300):
+    """Simple rate limiter: max_attempts per window seconds."""
+    now = time.time()
+    _rate_limits[key] = [t for t in _rate_limits[key] if now - t < window]
+    if len(_rate_limits[key]) >= max_attempts:
+        raise HTTPException(429, "Πάρα πολλές προσπάθειες. Δοκιμάστε αργότερα.")
+    _rate_limits[key].append(now)
 
 
 # --- Pydantic models ---
@@ -75,11 +89,15 @@ class ScheduleReq(BaseModel):
 
 # --- Auth endpoints ---
 @app.post("/api/auth/register")
-def api_register(req: RegisterReq):
+def api_register(req: RegisterReq, request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+    _check_rate_limit(f"register:{client_ip}", max_attempts=5, window=3600)
     return register_user(req.email, req.password, req.name)
 
 @app.post("/api/auth/login")
-def api_login(req: LoginReq):
+def api_login(req: LoginReq, request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+    _check_rate_limit(f"login:{client_ip}", max_attempts=10, window=300)
     return login_user(req.email, req.password)
 
 @app.get("/api/auth/me")
@@ -88,8 +106,10 @@ async def api_me(user=Depends(get_current_user)):
 
 
 @app.post("/api/auth/forgot-password")
-def api_forgot_password(req: ForgotPasswordReq):
+def api_forgot_password(req: ForgotPasswordReq, request: Request):
     """Send password reset email. Always returns success (no user enumeration)."""
+    client_ip = request.client.host if request.client else "unknown"
+    _check_rate_limit(f"forgot:{client_ip}", max_attempts=3, window=3600)
     import secrets
     email = req.email.strip().lower()
 
@@ -158,8 +178,7 @@ def api_reset_password(req: ResetPasswordReq):
     if datetime.fromisoformat(reset["expires_at"]) < datetime.now():
         raise HTTPException(410, "Ο σύνδεσμος έχει λήξει. Ζητήστε νέο.")
 
-    if len(req.password) < 6:
-        raise HTTPException(400, "Ο κωδικός πρέπει να έχει τουλάχιστον 6 χαρακτήρες")
+    validate_password(req.password)
 
     with get_db() as conn:
         conn.execute(
@@ -714,7 +733,11 @@ async def list_invoices(
                 COALESCE(SUM(net_amount), 0) as total_net,
                 COALESCE(SUM(vat_amount), 0) as total_vat,
                 COALESCE(SUM(total_amount), 0) as total_gross,
+                COALESCE(SUM(CASE WHEN direction='sent' THEN net_amount ELSE 0 END), 0) as sent_net,
+                COALESCE(SUM(CASE WHEN direction='sent' THEN vat_amount ELSE 0 END), 0) as sent_vat,
                 COALESCE(SUM(CASE WHEN direction='sent' THEN total_amount ELSE 0 END), 0) as sent_total,
+                COALESCE(SUM(CASE WHEN direction='received' THEN net_amount ELSE 0 END), 0) as received_net,
+                COALESCE(SUM(CASE WHEN direction='received' THEN vat_amount ELSE 0 END), 0) as received_vat,
                 COALESCE(SUM(CASE WHEN direction='received' THEN total_amount ELSE 0 END), 0) as received_total
             FROM invoices WHERE {where}""",
             params,
@@ -734,8 +757,12 @@ async def list_invoices(
             "net": summary["total_net"],
             "vat": summary["total_vat"],
             "gross": summary["total_gross"],
-            "sent": summary["sent_total"],
-            "received": summary["received_total"],
+            "sent_net": summary["sent_net"],
+            "sent_vat": summary["sent_vat"],
+            "sent_total": summary["sent_total"],
+            "received_net": summary["received_net"],
+            "received_vat": summary["received_vat"],
+            "received_total": summary["received_total"],
         },
     }
 
@@ -783,12 +810,14 @@ async def generate_report(req: ReportReq, user=Depends(get_current_user)):
 
     from reports import generate_report as do_generate, PRESETS
     if req.preset not in PRESETS:
-        raise HTTPException(400, f"Unknown preset: {req.preset}")
+        raise HTTPException(400, "Μη έγκυρο preset αναφοράς")
 
     try:
         result = await do_generate(req.company_id, user["id"], req.preset, req.params)
     except Exception as e:
-        raise HTTPException(500, str(e))
+        import logging
+        logging.getLogger(__name__).exception(f"Report error: {e}")
+        raise HTTPException(500, "Σφάλμα δημιουργίας αναφοράς.")
     return result
 
 
@@ -1004,7 +1033,7 @@ async def api_lookup_afm(afm: str, user=Depends(get_current_user)):
 
     afm = afm.strip().replace("EL", "").replace("el", "")
     if not _validate_afm(afm):
-        raise HTTPException(400, f"Μη έγκυρο ΑΦΜ: {afm}")
+        raise HTTPException(400, "Μη έγκυρο ΑΦΜ")
 
     # Check cache
     cached = _afm_cache_get(afm)
@@ -1136,11 +1165,17 @@ async def telegram_status(user=Depends(get_current_user)):
     linked = bool(row and row["telegram_chat_id"])
     return {"linked": linked, "bot_configured": bool(TELEGRAM_BOT_TOKEN)}
 
-TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "timologia-tg-secret")
+TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
+if not TELEGRAM_WEBHOOK_SECRET:
+    import secrets as _tg_s
+    TELEGRAM_WEBHOOK_SECRET = _tg_s.token_hex(32)
 
-@app.post(f"/api/telegram/webhook/{TELEGRAM_WEBHOOK_SECRET}")
+@app.post("/api/telegram/webhook")
 async def telegram_webhook(request: Request):
-    """Receive Telegram updates."""
+    """Receive Telegram updates — verified via secret_token header."""
+    header_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if header_secret != TELEGRAM_WEBHOOK_SECRET:
+        raise HTTPException(403, "Forbidden")
     update = await request.json()
     from telegram_bot import handle_update
     asyncio.create_task(handle_update(update))

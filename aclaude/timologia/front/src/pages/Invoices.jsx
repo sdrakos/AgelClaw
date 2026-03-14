@@ -146,21 +146,21 @@ export default function Invoices() {
             <p className="text-xs font-medium text-gray-500">Πλήθος</p>
             <p className="text-lg font-semibold text-slate-800">{total}</p>
           </div>
-          <div className="rounded-lg bg-white p-4 shadow-sm">
-            <p className="text-xs font-medium text-gray-500">Καθαρή Αξία</p>
-            <p className="text-lg font-semibold text-slate-800">{fmt(summary.net)}</p>
-          </div>
-          <div className="rounded-lg bg-white p-4 shadow-sm">
-            <p className="text-xs font-medium text-gray-500">ΦΠΑ</p>
-            <p className="text-lg font-semibold text-slate-800">{fmt(summary.vat)}</p>
+          <div className="rounded-lg bg-blue-50 p-4 shadow-sm">
+            <p className="text-xs font-medium text-blue-600">Εκδοθέντα (καθαρά)</p>
+            <p className="text-lg font-semibold text-blue-700">{fmt(summary.sent_net)}</p>
           </div>
           <div className="rounded-lg bg-blue-50 p-4 shadow-sm">
-            <p className="text-xs font-medium text-blue-600">Εκδοθέντα</p>
-            <p className="text-lg font-semibold text-blue-700">{fmt(summary.sent)}</p>
+            <p className="text-xs font-medium text-blue-600">ΦΠΑ Εκδοθέντων</p>
+            <p className="text-lg font-semibold text-blue-700">{fmt(summary.sent_vat)}</p>
           </div>
           <div className="rounded-lg bg-orange-50 p-4 shadow-sm">
-            <p className="text-xs font-medium text-orange-600">Ληφθέντα</p>
-            <p className="text-lg font-semibold text-orange-700">{fmt(summary.received)}</p>
+            <p className="text-xs font-medium text-orange-600">Ληφθέντα (καθαρά)</p>
+            <p className="text-lg font-semibold text-orange-700">{fmt(summary.received_net)}</p>
+          </div>
+          <div className="rounded-lg bg-orange-50 p-4 shadow-sm">
+            <p className="text-xs font-medium text-orange-600">ΦΠΑ Ληφθέντων</p>
+            <p className="text-lg font-semibold text-orange-700">{fmt(summary.received_vat)}</p>
           </div>
         </div>
       )}

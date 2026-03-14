@@ -234,53 +234,7 @@ async def get_invoices(
     return json.dumps(result, ensure_ascii=False)
 
 
-# ── Tool 2: Income Summary ──
-
-@function_tool
-async def income_summary(
-    ctx: RunContextWrapper[TimologiaContext],
-    date_from: str = "",
-    date_to: str = "",
-) -> str:
-    """ΠΡΟΣΟΧΗ: Επιστρέφει ΜΟΝΟ χαρακτηρισμένα (classified) έσοδα — ΟΧΙ όλα τα παραστατικά. Τα αποτελέσματα θα είναι ΛΙΓΟΤΕΡΑ από τα πραγματικά. Χρησιμοποίησε ΜΟΝΟ αν ο χρήστης ζητήσει ρητά "χαρακτηρισμένα". Για έσοδα/έξοδα/παραστατικά χρησιμοποίησε ΠΑΝΤΑ get_invoices. date_from, date_to: μορφή YYYY-MM-DD."""
-    tc = ctx.context
-    today = _greek_now().strftime("%Y-%m-%d")
-    if not date_from:
-        date_from = today
-    if not date_to:
-        date_to = today
-    client = _get_client(tc)
-    try:
-        data = await client.get_income(date_from, date_to)
-    finally:
-        await client.close()
-    return data.decode("utf-8", errors="replace")[:4000]
-
-
-# ── Tool 3: Expenses Summary ──
-
-@function_tool
-async def expenses_summary(
-    ctx: RunContextWrapper[TimologiaContext],
-    date_from: str = "",
-    date_to: str = "",
-) -> str:
-    """ΠΡΟΣΟΧΗ: Επιστρέφει ΜΟΝΟ χαρακτηρισμένα (classified) έξοδα — ΟΧΙ όλα τα παραστατικά. Τα αποτελέσματα θα είναι ΛΙΓΟΤΕΡΑ από τα πραγματικά. Χρησιμοποίησε ΜΟΝΟ αν ο χρήστης ζητήσει ρητά "χαρακτηρισμένα". Για έσοδα/έξοδα/παραστατικά χρησιμοποίησε ΠΑΝΤΑ get_invoices. date_from, date_to: μορφή YYYY-MM-DD."""
-    tc = ctx.context
-    today = _greek_now().strftime("%Y-%m-%d")
-    if not date_from:
-        date_from = today
-    if not date_to:
-        date_to = today
-    client = _get_client(tc)
-    try:
-        data = await client.get_expenses(date_from, date_to)
-    finally:
-        await client.close()
-    return data.decode("utf-8", errors="replace")[:4000]
-
-
-# ── Tool 4: Send Invoice ──
+# ── Tool 2: Send Invoice ──
 
 @function_tool
 async def send_invoice(
@@ -521,9 +475,12 @@ async def update_company_settings(
             "message": f"Θα ενημερωθούν οι ρυθμίσεις: {changes}. Πατήστε 'Επιβεβαίωση'.",
         }, ensure_ascii=False)
 
-    # Apply changes
+    # Apply changes (whitelist columns to prevent SQL injection)
+    ALLOWED_COLS = {"name", "aade_env"}
     with get_db() as conn:
         for key, val in changes.items():
+            if key not in ALLOWED_COLS:
+                continue
             conn.execute(f"UPDATE companies SET {key}=? WHERE id=?", (val, tc.company_id))
 
     return json.dumps({
@@ -629,7 +586,7 @@ def create_agent(context: TimologiaContext) -> Agent:
 1. Απαντάς ΠΑΝΤΑ στα Ελληνικά.
 2. Για κάθε ενέργεια εγγραφής (αποστολή παραστατικού, ακύρωση, αλλαγή ρυθμίσεων) ΠΑΝΤΑ κάνεις πρώτα dry_run=True.
 3. ΠΟΤΕ μην στέλνεις παραστατικό ή ακυρώνεις χωρίς dry_run πρώτα — ο χρήστης πρέπει να επιβεβαιώσει.
-4. Όταν ο χρήστης ρωτάει για παραστατικά/έσοδα/έξοδα, ΠΑΝΤΑ χρησιμοποίησε get_invoices (τοπικός cache — πλήρη δεδομένα, ίδια με το web app). Για έσοδα: direction='sent'. Για έξοδα: direction='received'. Για όλα: direction='all'. Τα income_summary/expenses_summary επιστρέφουν ΜΟΝΟ χαρακτηρισμένα παραστατικά (classified) από AADE — χρησιμοποίησέ τα ΜΟΝΟ αν ο χρήστης ζητήσει ρητά "χαρακτηρισμένα" έσοδα/έξοδα.
+4. Όταν ο χρήστης ρωτάει για παραστατικά/έσοδα/έξοδα, ΠΑΝΤΑ χρησιμοποίησε get_invoices (τοπικός cache — πλήρη δεδομένα, ίδια με το web app). Για έσοδα: direction='sent'. Για έξοδα: direction='received'. Για όλα: direction='all'.
 5. Για αναφορές/reports χρησιμοποίησε generate_report_tool.
 6. Μην εμφανίζεις ποτέ credentials (aade_user_id, subscription_key).
 7. Τα ποσά εμφανίζονται σε EUR με 2 δεκαδικά.
@@ -648,8 +605,6 @@ def create_agent(context: TimologiaContext) -> Agent:
         instructions=instructions,
         tools=[
             get_invoices,
-            income_summary,
-            expenses_summary,
             send_invoice,
             cancel_invoice,
             generate_report_tool,

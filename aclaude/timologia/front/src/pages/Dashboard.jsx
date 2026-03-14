@@ -108,21 +108,21 @@ export default function Dashboard() {
     if (!activeCompanyId) return
     setLoading(true)
 
-    apiJson(`/api/invoices?company_id=${activeCompanyId}&per_page=5`)
-      .then((data) => {
-        const list = data.items || data.invoices || []
-        setInvoices(list)
+    const now = new Date()
+    const dateFrom = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
+    const dateTo = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
 
-        // Calculate stats from invoices
-        const now = new Date()
-        const thisMonth = list.filter((inv) => {
-          const d = new Date(inv.issue_date || inv.date)
-          return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()
-        })
+    Promise.all([
+      apiJson(`/api/invoices?company_id=${activeCompanyId}&per_page=5`),
+      apiJson(`/api/invoices?company_id=${activeCompanyId}&date_from=${dateFrom}&date_to=${dateTo}&per_page=1`),
+    ])
+      .then(([recent, monthly]) => {
+        setInvoices(recent.items || recent.invoices || [])
+        const s = monthly.summary || {}
         setStats({
-          revenue: thisMonth.reduce((s, i) => s + (i.net_amount || 0), 0),
-          vat: thisMonth.reduce((s, i) => s + (i.vat_amount || 0), 0),
-          count: thisMonth.length,
+          revenue: s.sent_net || 0,
+          vat: s.sent_vat || 0,
+          count: monthly.total || 0,
         })
       })
       .catch(() => {})

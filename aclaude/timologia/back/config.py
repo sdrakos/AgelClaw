@@ -7,7 +7,18 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
-JWT_SECRET = os.environ.get("JWT_SECRET", "change-me")
+JWT_SECRET = os.environ.get("JWT_SECRET", "")
+if not JWT_SECRET:
+    import secrets as _s
+    JWT_SECRET = _s.token_hex(32)
+    _env = BASE_DIR / ".env"
+    if _env.exists():
+        _c = _env.read_text()
+        if "JWT_SECRET=" in _c:
+            _c = _c.replace("JWT_SECRET=", f"JWT_SECRET={JWT_SECRET}", 1)
+        else:
+            _c += f"\nJWT_SECRET={JWT_SECRET}\n"
+        _env.write_text(_c)
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = 24
 
@@ -39,3 +50,12 @@ OUTLOOK_USER_EMAIL = os.environ.get("OUTLOOK_USER_EMAIL", "")
 DB_PATH = BASE_DIR / "data" / "timologia.db"
 REPORTS_DIR = BASE_DIR / "data" / "reports"
 APP_URL = os.environ.get("APP_URL", "http://localhost:5173")
+
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "")
+
+# CORS — comma-separated origins
+ALLOWED_ORIGINS = [
+    o.strip() for o in
+    os.environ.get("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",")
+    if o.strip()
+]

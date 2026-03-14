@@ -14,14 +14,15 @@ log = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
-WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "timologia-tg-secret")
-
-
 async def set_webhook(base_url: str):
-    """Set Telegram webhook URL and register bot commands."""
-    url = f"{base_url}/api/telegram/webhook/{WEBHOOK_SECRET}"
+    """Set Telegram webhook URL with secret token verification."""
+    from app import TELEGRAM_WEBHOOK_SECRET
+    url = f"{base_url}/api/telegram/webhook"
     async with httpx.AsyncClient() as client:
-        resp = await client.post(f"{API_URL}/setWebhook", json={"url": url})
+        resp = await client.post(f"{API_URL}/setWebhook", json={
+            "url": url,
+            "secret_token": TELEGRAM_WEBHOOK_SECRET,
+        })
         log.info(f"Telegram webhook set: {resp.json()}")
         # Register bot commands (visible when user types /)
         await client.post(f"{API_URL}/setMyCommands", json={"commands": [

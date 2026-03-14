@@ -1,13 +1,12 @@
 """JWT authentication: register, login, middleware."""
+import os
 import bcrypt
 import jwt
 import threading
 from datetime import datetime, timedelta, timezone
 from fastapi import Request, HTTPException
-from config import JWT_SECRET, JWT_ALGORITHM, JWT_EXPIRY_HOURS
+from config import JWT_SECRET, JWT_ALGORITHM, JWT_EXPIRY_HOURS, ADMIN_EMAIL
 from db import get_db
-
-ADMIN_EMAIL = "stefanos.drakos@gmail.com"
 
 def _notify_admin(subject: str, body: str):
     """Send notification email to admin in background thread."""
@@ -26,6 +25,16 @@ def hash_password(password: str) -> str:
 
 def verify_password(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode(), hashed.encode())
+
+
+def validate_password(password: str):
+    """Enforce minimum password policy: 8+ chars, 1 letter, 1 digit."""
+    if len(password) < 8:
+        raise HTTPException(400, "Ο κωδικός πρέπει να έχει τουλάχιστον 8 χαρακτήρες")
+    if not any(c.isalpha() for c in password):
+        raise HTTPException(400, "Ο κωδικός πρέπει να περιέχει τουλάχιστον ένα γράμμα")
+    if not any(c.isdigit() for c in password):
+        raise HTTPException(400, "Ο κωδικός πρέπει να περιέχει τουλάχιστον ένα ψηφίο")
 
 
 def create_token(user_id: int, role: str) -> str:
@@ -47,6 +56,7 @@ def decode_token(token: str) -> dict:
 
 
 def register_user(email: str, password: str, name: str) -> dict:
+    validate_password(password)
     with get_db() as conn:
         existing = conn.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
         if existing:

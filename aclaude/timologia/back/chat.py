@@ -1,5 +1,6 @@
 """Chat endpoint — SSE streaming with OpenAI Agents SDK."""
 import json
+import logging
 import os
 import traceback
 from datetime import datetime, timedelta
@@ -13,6 +14,8 @@ from config import FERNET, OPENAI_API_KEY
 from db import get_db
 
 os.environ.setdefault("OPENAI_API_KEY", OPENAI_API_KEY)
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/chat")
 
@@ -212,7 +215,8 @@ async def chat(req: ChatRequest, user=Depends(get_current_user)):
             yield _sse_event("done", {"session_id": session_id})
 
         except Exception as e:
-            yield _sse_event("error", {"message": str(e), "detail": traceback.format_exc()[-500:]})
+            log.exception(f"Chat error: {e}")
+            yield _sse_event("error", {"message": "Προέκυψε σφάλμα. Δοκιμάστε ξανά."})
 
     return StreamingResponse(
         event_stream(),
@@ -317,13 +321,16 @@ async def confirm_action(action_id: int, req: ConfirmRequest, user=Depends(get_c
             if original_args.get("aade_env") and original_args["aade_env"] in ("dev", "prod"):
                 changes["aade_env"] = original_args["aade_env"]
 
+            ALLOWED_COLS = {"name", "aade_env"}
             with get_db() as conn:
                 for key, val in changes.items():
+                    if key not in ALLOWED_COLS:
+                        continue
                     conn.execute(f"UPDATE companies SET {key}=? WHERE id=?", (val, req.company_id))
             result = {"updated": changes}
 
         else:
-            raise HTTPException(400, f"Unknown action type: {action_type}")
+            raise HTTPException(400, "Μη έγκυρη ενέργεια")
 
         # Mark action as confirmed
         with get_db() as conn:
