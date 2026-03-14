@@ -1,10 +1,23 @@
 """JWT authentication: register, login, middleware."""
 import bcrypt
 import jwt
+import threading
 from datetime import datetime, timedelta, timezone
 from fastapi import Request, HTTPException
 from config import JWT_SECRET, JWT_ALGORITHM, JWT_EXPIRY_HOURS
 from db import get_db
+
+ADMIN_EMAIL = "stefanos.drakos@gmail.com"
+
+def _notify_admin(subject: str, body: str):
+    """Send notification email to admin in background thread."""
+    def _send():
+        try:
+            from email_sender import send_email
+            send_email([ADMIN_EMAIL], subject, body)
+        except Exception:
+            pass
+    threading.Thread(target=_send, daemon=True).start()
 
 
 def hash_password(password: str) -> str:
@@ -45,6 +58,9 @@ def register_user(email: str, password: str, name: str) -> dict:
         user_id = cur.lastrowid
     token = create_token(user_id, "user")
     user = {"id": user_id, "email": email, "name": name, "role": "user"}
+    # Notify admin
+    _notify_admin("Νέος χρήστης στο Timologia",
+                  f"<b>Νέα εγγραφή</b><br>Όνομα: {name}<br>Email: {email}")
     return {"token": token, "user": user}
 
 

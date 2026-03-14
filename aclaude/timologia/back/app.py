@@ -235,6 +235,11 @@ async def create_company(req: CompanyReq, user=Depends(get_current_user)):
             "INSERT INTO company_members (user_id, company_id, role) VALUES (?, ?, 'owner')",
             (user["id"], company_id),
         )
+    # Notify admin
+    from auth import _notify_admin
+    _notify_admin("Νέα εταιρεία στο Timologia",
+                  f"<b>Νέα εταιρεία</b><br>Επωνυμία: {req.name}<br>ΑΦΜ: {req.afm}<br>"
+                  f"Περιβάλλον: {req.aade_env}<br>Από: {user['email']}")
     return {"id": company_id, "name": req.name, "afm": req.afm}
 
 @app.put("/api/companies/{company_id}")
