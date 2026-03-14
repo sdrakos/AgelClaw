@@ -193,6 +193,30 @@ async def list_companies(user=Depends(get_current_user)):
 
 @app.post("/api/companies")
 async def create_company(req: CompanyReq, user=Depends(get_current_user)):
+    # Validate AADE credentials match the AFM
+    if req.aade_user_id and req.aade_subscription_key:
+        from aade_client import MyDataClient
+        client = MyDataClient(
+            user_id=req.aade_user_id,
+            subscription_key=req.aade_subscription_key,
+            issuer_vat=req.afm,
+            env=req.aade_env or "dev",
+        )
+        try:
+            from datetime import date as _date
+            today = _date.today().strftime("%d/%m/%Y")
+            raw = await client._get("RequestMyIncome", {"dateFrom": today, "dateTo": today})
+            # AADE returns XML — auth errors have statusCode != "Success" or HTTP-level errors
+            text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+            if "Not authorized" in text or "Unauthorized" in text or "StatusCode>4" in text:
+                raise HTTPException(400, "Τα στοιχεία ΑΑΔΕ δεν αντιστοιχούν σε αυτό το ΑΦΜ. Ελέγξτε User ID και Subscription Key.")
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(400, "Αποτυχία σύνδεσης με ΑΑΔΕ. Ελέγξτε τα στοιχεία σας.")
+        finally:
+            await client.close()
+
     encrypted_uid = FERNET.encrypt(req.aade_user_id.encode()).decode() if req.aade_user_id else ""
     encrypted_key = FERNET.encrypt(req.aade_subscription_key.encode()).decode() if req.aade_subscription_key else ""
     with get_db() as conn:
@@ -214,6 +238,28 @@ async def create_company(req: CompanyReq, user=Depends(get_current_user)):
 @app.put("/api/companies/{company_id}")
 async def update_company(company_id: int, req: CompanyReq, user=Depends(get_current_user)):
     require_role(user["id"], company_id, "owner")
+    # Validate AADE credentials on update too
+    if req.aade_user_id and req.aade_subscription_key:
+        from aade_client import MyDataClient
+        client = MyDataClient(
+            user_id=req.aade_user_id,
+            subscription_key=req.aade_subscription_key,
+            issuer_vat=req.afm,
+            env=req.aade_env or "dev",
+        )
+        try:
+            from datetime import date as _date
+            today = _date.today().strftime("%d/%m/%Y")
+            raw = await client._get("RequestMyIncome", {"dateFrom": today, "dateTo": today})
+            text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+            if "Not authorized" in text or "Unauthorized" in text or "StatusCode>4" in text:
+                raise HTTPException(400, "Τα στοιχεία ΑΑΔΕ δεν αντιστοιχούν σε αυτό το ΑΦΜ. Ελέγξτε User ID και Subscription Key.")
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(400, "Αποτυχία σύνδεσης με ΑΑΔΕ. Ελέγξτε τα στοιχεία σας.")
+        finally:
+            await client.close()
     encrypted_uid = FERNET.encrypt(req.aade_user_id.encode()).decode() if req.aade_user_id else ""
     encrypted_key = FERNET.encrypt(req.aade_subscription_key.encode()).decode() if req.aade_subscription_key else ""
     with get_db() as conn:
