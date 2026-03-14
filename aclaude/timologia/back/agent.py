@@ -109,6 +109,23 @@ def _soap_lookup_afm(afm: str) -> dict:
         "is_active": str(getattr(basic, "deactivation_flag", "1")) != "2",
         "address": f"{getattr(basic, 'postal_address', '') or ''} {getattr(basic, 'postal_address_no', '') or ''}, {getattr(basic, 'postal_zip_code', '') or ''} {getattr(basic, 'postal_area_description', '') or ''}".strip(", "),
     }
+
+    # Extract ΚΑΔ (business activity codes)
+    activities = []
+    if hasattr(result, "firm_act_tab") and result.firm_act_tab:
+        act_list = result.firm_act_tab.item if hasattr(result.firm_act_tab, "item") else result.firm_act_tab
+        if not isinstance(act_list, list):
+            act_list = [act_list]
+        for act in act_list:
+            kad = {
+                "code": str(getattr(act, "firm_act_code", "") or ""),
+                "description": getattr(act, "firm_act_descr", "") or "",
+                "kind": str(getattr(act, "firm_act_kind", "") or ""),
+            }
+            # kind: 1=κύρια, 2=δευτερεύουσα
+            kad["kind_description"] = "Κύρια" if kad["kind"] == "1" else "Δευτερεύουσα"
+            activities.append(kad)
+    info["activities"] = activities
     return info
 
 
@@ -468,17 +485,18 @@ async def lookup_afm(
     afm: str,
 ) -> str:
     """Αναζήτηση στοιχείων επιχείρησης από ΑΦΜ μέσω ΑΑΔΕ (GSIS).
-    Επιστρέφει: επωνυμία, ΔΟΥ, διεύθυνση, νομική μορφή, κατάσταση.
-    Χρησιμοποίησε αυτό το tool για να βρεις το όνομα ενός προμηθευτή/πελάτη από το ΑΦΜ του.
+    Επιστρέφει: επωνυμία, ΔΟΥ, διεύθυνση, νομική μορφή, κατάσταση, ΚΑΔ (κωδικοί δραστηριότητας).
+    Χρησιμοποίησε αυτό το tool για να βρεις το όνομα ενός προμηθευτή/πελάτη από το ΑΦΜ του
+    ή για να δεις τους ΚΑΔ (κύριους και δευτερεύοντες).
     """
     afm = afm.strip().replace("EL", "").replace("el", "")
 
     if not _validate_afm(afm):
         return json.dumps({"error": f"Μη έγκυρο ΑΦΜ: {afm}"}, ensure_ascii=False)
 
-    # Check cache first
+    # Check cache first (skip if missing activities — old cache format)
     cached = _afm_cache_get(afm)
-    if cached:
+    if cached and "activities" in cached:
         cached["_source"] = "cache"
         return json.dumps(cached, ensure_ascii=False)
 
