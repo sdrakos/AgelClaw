@@ -376,14 +376,24 @@ def _write_invoice_sheet(ws, invoices: list, direction: str):
     if invoices:
         total_row = len(invoices) + 2
         num_cols = len(columns)
-        ws.cell(row=total_row, column=4, value="ΣΥΝΟΛΟ").font = TOTAL_FONT
 
-        for col_idx in (num_cols - 3, num_cols - 2, num_cols - 1):
-            col_letter = get_column_letter(col_idx)
-            cell = ws.cell(
-                row=total_row, column=col_idx,
-                value=f"=SUM({col_letter}2:{col_letter}{total_row - 1})",
-            )
+        # Calculate totals
+        total_net = sum(_to_float(inv.get("totalNetValue", 0)) for inv in invoices)
+        total_vat = sum(_to_float(inv.get("totalVatAmount", 0)) for inv in invoices)
+        total_gross = sum(_to_float(inv.get("totalGrossValue", 0)) for inv in invoices)
+        totals = {num_cols - 3: total_net, num_cols - 2: total_vat, num_cols - 1: total_gross}
+
+        # Label
+        ws.cell(row=total_row, column=1, value="ΣΥΝΟΛΟ").font = TOTAL_FONT
+        ws.cell(row=total_row, column=1).fill = TOTAL_FILL
+
+        # Count
+        if direction == "expenses":
+            ws.cell(row=total_row, column=3, value=len(invoices)).font = TOTAL_FONT
+            ws.cell(row=total_row, column=3).fill = TOTAL_FILL
+
+        for col_idx, total_val in totals.items():
+            cell = ws.cell(row=total_row, column=col_idx, value=round(total_val, 2))
             cell.number_format = CURRENCY_FMT
             cell.font = TOTAL_FONT
             cell.fill = TOTAL_FILL
