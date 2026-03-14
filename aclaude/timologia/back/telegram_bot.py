@@ -31,14 +31,17 @@ async def set_webhook(base_url: str):
         ]})
 
 
-async def send_message(chat_id: str | int, text: str):
-    """Send a Telegram message."""
+async def send_message(chat_id: str | int, text: str, reply_markup: dict | None = None):
+    """Send a Telegram message, optionally with inline keyboard."""
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+    }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
     async with httpx.AsyncClient() as client:
-        await client.post(f"{API_URL}/sendMessage", json={
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": "HTML",
-        })
+        await client.post(f"{API_URL}/sendMessage", json=payload)
 
 
 async def send_document(chat_id: str | int, file_path: str, caption: str = ""):
@@ -193,8 +196,38 @@ def unlink_telegram(user_id: int):
         )
 
 
+async def _answer_callback(callback_query_id: str, text: str = ""):
+    """Answer a callback query (dismiss loading indicator)."""
+    async with httpx.AsyncClient() as client:
+        await client.post(f"{API_URL}/answerCallbackQuery", json={
+            "callback_query_id": callback_query_id,
+            "text": text,
+        })
+
+
 async def handle_update(update: dict):
     """Process a Telegram webhook update."""
+    # Handle inline keyboard button presses
+    callback = update.get("callback_query")
+    if callback:
+        chat_id = str(callback["message"]["chat"]["id"])
+        data = callback.get("data", "")
+        if data.startswith("company_"):
+            company_id = int(data.split("_", 1)[1])
+            user = get_user_by_chat_id(chat_id)
+            if user:
+                # Verify user has access
+                company = get_user_company(user["id"], company_id)
+                if company:
+                    set_active_company(user["id"], company_id)
+                    await _answer_callback(callback["id"], f"✓ {company['name']}")
+                    await send_message(chat_id, f"Ενεργή εταιρεία: <b>{company['name']}</b>")
+                else:
+                    await _answer_callback(callback["id"], "Δεν βρέθηκε η εταιρεία")
+            else:
+                await _answer_callback(callback["id"], "Δεν είστε συνδεδεμένος")
+        return
+
     message = update.get("message")
     if not message:
         return
@@ -241,7 +274,7 @@ async def handle_update(update: dict):
             await send_message(chat_id, "Δεν είσαι συνδεδεμένος.")
         return
 
-    # Handle /company — switch active company
+    # Handle /company — switch active company (inline keyboard)
     if text == "/company":
         user = get_user_by_chat_id(chat_id)
         if not user:
@@ -251,22 +284,12 @@ async def handle_update(update: dict):
         if len(companies) <= 1:
             await send_message(chat_id, "Έχετε μόνο μία εταιρεία.")
             return
-        lines = ["Επιλέξτε εταιρεία (στείλτε τον αριθμό):\n"]
-        for i, c in enumerate(companies, 1):
-            active = " ✓" if c["id"] == user.get("telegram_company_id") else ""
-            lines.append(f"{i}. {c['name']} (ΑΦΜ: {c['afm']}){active}")
-        await send_message(chat_id, "\n".join(lines))
+        buttons = []
+        for c in companies:
+            label = f"{'✓ ' if c['id'] == user.get('telegram_company_id') else ''}{c['name']} ({c['afm']})"
+            buttons.append([{"text": label, "callback_data": f"company_{c['id']}"}])
+        await send_message(chat_id, "Επιλέξτε εταιρεία:", reply_markup={"inline_keyboard": buttons})
         return
-
-    # Check if user is selecting a company (digit response after /company)
-    user = get_user_by_chat_id(chat_id)
-    if user and text.isdigit():
-        companies = get_user_companies(user["id"])
-        idx = int(text) - 1
-        if 0 <= idx < len(companies):
-            set_active_company(user["id"], companies[idx]["id"])
-            await send_message(chat_id, f"Ενεργή εταιρεία: <b>{companies[idx]['name']}</b>")
-            return
 
     # Regular message — forward to AI agent
     if not user:
