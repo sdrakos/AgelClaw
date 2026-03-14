@@ -292,6 +292,7 @@ async def handle_update(update: dict):
         return
 
     # Regular message — forward to AI agent
+    user = get_user_by_chat_id(chat_id)
     if not user:
         await send_message(chat_id,
             "Δεν είστε συνδεδεμένος.\n"
