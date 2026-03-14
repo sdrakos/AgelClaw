@@ -158,7 +158,9 @@ async def get_invoices(
     date_to: str = "",
     direction: str = "sent",
 ) -> str:
-    """Ανάκτηση παραστατικών από AADE. direction: 'sent' ή 'received'."""
+    """Ανάκτηση παραστατικών από AADE.
+    date_from, date_to: μορφή YYYY-MM-DD (π.χ. '2026-02-01').
+    direction: 'sent' ή 'received'."""
     tc = ctx.context
     client = _get_client(tc)
     try:
@@ -186,7 +188,7 @@ async def income_summary(
     date_from: str = "",
     date_to: str = "",
 ) -> str:
-    """Σύνοψη εσόδων για περίοδο. Επιστρέφει XML από AADE."""
+    """Σύνοψη εσόδων για περίοδο. date_from, date_to: μορφή YYYY-MM-DD. Επιστρέφει XML από AADE."""
     tc = ctx.context
     today = _greek_now().strftime("%Y-%m-%d")
     if not date_from:
@@ -209,7 +211,7 @@ async def expenses_summary(
     date_from: str = "",
     date_to: str = "",
 ) -> str:
-    """Σύνοψη εξόδων για περίοδο. Επιστρέφει XML από AADE."""
+    """Σύνοψη εξόδων για περίοδο. date_from, date_to: μορφή YYYY-MM-DD. Επιστρέφει XML από AADE."""
     tc = ctx.context
     today = _greek_now().strftime("%Y-%m-%d")
     if not date_from:
@@ -583,6 +585,7 @@ def create_agent(context: TimologiaContext) -> Agent:
 11. Όταν δημιουργείται αναφορά Excel, ΜΗΝ εμφανίσεις file path, link ή URL. Απλά ανέφερε ότι η αναφορά δημιουργήθηκε — το κουμπί λήψης εμφανίζεται αυτόματα στο chat.
 12. Για αποστολή αναφοράς με email, χρησιμοποίησε email_report με το report_id από generate_report_tool. Ρώτα τον χρήστη για τη διεύθυνση email αν δεν τη δώσει.
 13. ΜΟΡΦΟΠΟΙΗΣΗ: Γράψε απλό κείμενο χωρίς Markdown σύμβολα. ΠΟΤΕ μην χρησιμοποιείς **, ##, ###, ---, ``` ή άλλα σύμβολα μορφοποίησης. Για λίστες χρησιμοποίησε απλές παύλες (-). Για πίνακες χρησιμοποίησε στοίχιση με κενά ή απλή λίστα.
+14. ΗΜΕΡΟΜΗΝΙΕΣ: Πέρασε ημερομηνίες στα tools ΠΑΝΤΑ σε μορφή YYYY-MM-DD (π.χ. '2026-02-01'). Υπολόγισε σχετικές ημερομηνίες μόνος σου: "περασμένο μήνα" = πρώτη και τελευταία μέρα του προηγούμενου μήνα, "αυτή τη βδομάδα" = Δευτέρα έως σήμερα, κλπ. ΜΗΝ ρωτάς τον χρήστη για ημερομηνίες αν μπορείς να τις υπολογίσεις.
 """
 
     return Agent(
