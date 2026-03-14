@@ -357,11 +357,11 @@ npm run dev                       # → http://localhost:5173 (proxies /api→:8
 timologia/
 ├── back/
 │   ├── app.py                    # FastAPI app: auth, companies, invoices, reports, schedules, admin panel
-│   ├── auth.py                   # JWT (HS256, 24h) + bcrypt + role hierarchy + admin notifications
-│   ├── config.py                 # Env vars, Fernet auto-gen, paths
+│   ├── auth.py                   # JWT (HS256, 24h) + bcrypt + role hierarchy + password policy + admin notifications
+│   ├── config.py                 # Env vars, Fernet auto-gen, JWT auto-gen, CORS, paths
 │   ├── db.py                     # SQLite WAL + migration runner
 │   ├── chat.py                   # SSE streaming + OpenAI Runner + confirmation flow
-│   ├── agent.py                  # OpenAI Agents SDK: 11 tools, TimologiaContext, create_agent()
+│   ├── agent.py                  # OpenAI Agents SDK: 9 tools, TimologiaContext, create_agent()
 │   ├── aade_client.py            # MyDataClient (adapted from MCP server)
 │   ├── invoice_xml.py            # lxml XML builder + VAT rates
 │   ├── analytics.py              # GET /api/analytics — 10 aggregation sections (period comparison, forecast, charts)
@@ -390,7 +390,7 @@ timologia/
 
 ### Key Design Decisions (Timologia-specific)
 
-**OpenAI Agents SDK (`openai-agents`).** Agent uses `gpt-4.1`, `@function_tool` decorators, `RunContextWrapper[TimologiaContext]` for context passing. Strict JSON schema: tool params must be concrete types (no `list[dict]` — use `str` + `json.loads()`). Agent has 11 tools total.
+**OpenAI Agents SDK (`openai-agents`).** Agent uses `gpt-4.1`, `@function_tool` decorators, `RunContextWrapper[TimologiaContext]` for context passing. Strict JSON schema: tool params must be concrete types (no `list[dict]` — use `str` + `json.loads()`). Agent has 9 tools: `get_invoices`, `send_invoice`, `cancel_invoice`, `generate_report_tool`, `list_companies`, `get_company_settings`, `update_company_settings`, `lookup_afm`, `email_report`. The `income_summary`/`expenses_summary` tools were removed — they returned only AADE classified data (subset), causing confusion with the full invoice cache data.
 
 **No Markdown in agent output.** Agent rule 13 prohibits `**`, `##`, `###`, `---`, triple backticks, and Markdown tables. Use plain text with dashes for lists and spaces for alignment.
 
@@ -428,7 +428,7 @@ timologia/
 
 **Admin visibility.** Platform admins (`role='admin'`) see all companies via `GET /api/companies` without needing `company_members` entries. Admin users are hidden from non-admin users in `GET /api/companies/{id}/members` — regular users don't see the admin in their member list.
 
-**Admin email notifications.** `auth.py` sends email to `stefanos.drakos@gmail.com` on user registration and company creation via `_notify_admin()` (background thread, non-blocking). Uses `email_sender.send_email()` (Microsoft Graph).
+**Admin email notifications.** `auth.py` sends email to `ADMIN_EMAIL` (env var, configured in `config.py`) on user registration and company creation via `_notify_admin()` (background thread, non-blocking). Uses `email_sender.send_email()` (Microsoft Graph).
 
 **AFM lookup with ΚΑΔ.** `lookup_afm` tool (tool 10) returns business activity codes (ΚΑΔ) from GSIS SOAP `rgWsPublic2AfmMethod` — `firm_act_tab` with code, description, kind (1=Κύρια, 2=Δευτερεύουσα). Cache skips entries without `activities` key to force re-lookup for old cached data.
 
@@ -440,7 +440,7 @@ timologia/
 
 **Analytics dashboard.** `analytics.py` provides `GET /api/analytics?company_id=X` — fetches all invoices once, aggregates in Python. Returns 10 sections: period_comparison (month/week/YoY), daily_revenue (30 days), vat_breakdown (pie), top_suppliers, top_customers, avg_invoice_by_month, month_forecast (linear projection), seasonality, weekday_revenue, monthly_evolution. Frontend uses Recharts (+ `react-is` peer dep). Route: `/analytics`.
 
-**Invoice summary stats.** `/api/invoices` endpoint returns `summary` object (net, vat, gross, sent_count, received_count) alongside invoices. Frontend shows 5 stat cards above the invoice table.
+**Invoice summary stats.** `/api/invoices` endpoint returns `summary` object with split sent/received breakdowns: `sent_net`, `sent_vat`, `sent_total`, `received_net`, `received_vat`, `received_total` (plus totals: `net`, `vat`, `gross`). Invoices page shows 5 stat cards: Πλήθος, Εκδοθέντα (καθαρά), ΦΠΑ Εκδοθέντων, Ληφθέντα (καθαρά), ΦΠΑ Ληφθέντων. Dashboard shows monthly stats for sent invoices only (revenue = sent_net, VAT = sent_vat) using a dedicated API call with date filters.
 
 **Multi-company frontend.** CompanySelector has "+" button to add new companies with AADE credentials. CompanyContext exposes `addCompany()` and `fetchCompanies()`.
 
@@ -449,6 +449,45 @@ timologia/
 **Scheduled report custom params.** Schedule form shows extra fields (Period + Direction) when preset is `custom` or `expenses_by_supplier`. Periods are relative (today, yesterday, last 7/30 days, current/previous month, quarter, year) — resolved dynamically at execution time via `_resolve_relative_period()`. Direction filter (`all`/`sent`/`received`) controls which AADE API calls are made.
 
 **RQ SimpleWorker on Windows.** `worker.py` uses `SimpleWorker` (in-process) on Windows instead of `Worker` (fork-based) to avoid `os.fork()` crash. Schedule timing uses `>=` comparison instead of exact minute match.
+
+**Telegram bot multi-company.** Users can link Telegram via Settings → generates one-time token → `/start <token>` in bot. `/company` shows inline keyboard buttons for company switching. Admins see all companies. Conversation history persisted in `chat_sessions` table (`MAX_HISTORY=20`). Bot commands registered via `setMyCommands` (visible when user types `/`). Webhook uses `secret_token` header verification (not URL-path secret).
+
+### Security (Timologia-specific)
+
+**JWT secret auto-generation.** `config.py` auto-generates a strong 64-char hex JWT secret if `JWT_SECRET` is not set in `.env`. Writes it to `.env` on first run. No more weak default.
+
+**Password policy.** `validate_password()` in `auth.py` enforces: 8+ characters, at least 1 letter, at least 1 digit. Applied on both registration and password reset.
+
+**SQL injection prevention.** All dynamic `UPDATE companies SET {key}=?` queries whitelist allowed column names (`ALLOWED_COLS = {"name", "aade_env"}`). Applied in `agent.py`, `chat.py`.
+
+**Rate limiting.** In-memory rate limiter in `app.py`: login (10/5min per IP), register (5/hour per IP), forgot-password (3/hour per IP). Returns 429 on excess.
+
+**CORS restriction.** Origins configurable via `ALLOWED_ORIGINS` env var (comma-separated). Methods restricted to `GET, POST, PUT, DELETE, OPTIONS`. Headers restricted to `Content-Type, Authorization`.
+
+**Error message sanitization.** Stack traces never sent to client. Chat SSE errors return generic Greek message. Report errors logged server-side only. User input never reflected in error messages.
+
+**Telegram webhook hardening.** Webhook endpoint at `/api/telegram/webhook` (fixed path). Verified via `X-Telegram-Bot-Api-Secret-Token` header (Telegram sends it automatically). Secret configured via `TELEGRAM_WEBHOOK_SECRET` env var — must be set in `.env` and match between app and `set_webhook()` call.
+
+**Frontend JWT expiry check.** `auth.js` `getToken()` decodes JWT payload and checks `exp` claim. Expired tokens trigger automatic logout. Prevents stale sessions.
+
+**Admin email from env.** `ADMIN_EMAIL` moved from hardcoded value in `auth.py` to `config.py` env var. Set via `.env`.
+
+### Timologia Environment Variables (.env)
+
+```
+JWT_SECRET=<auto-generated-or-set>
+FERNET_KEY=<auto-generated>
+OPENAI_API_KEY=sk-...
+ADMIN_EMAIL=stefanos.drakos@gmail.com
+ALLOWED_ORIGINS=https://timologia.me
+TELEGRAM_BOT_TOKEN=<bot-token>
+TELEGRAM_WEBHOOK_SECRET=<64-char-hex>
+OUTLOOK_CLIENT_ID=...
+OUTLOOK_CLIENT_SECRET=...
+OUTLOOK_TENANT_ID=...
+OUTLOOK_USER_EMAIL=info@timologia.me
+APP_URL=https://timologia.me
+```
 
 ## Configuration (config.yaml)
 
